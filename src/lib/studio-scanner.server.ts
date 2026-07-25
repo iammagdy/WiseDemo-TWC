@@ -274,6 +274,23 @@ function collectActions(html: string) {
   return unique(actions).slice(0, 12);
 }
 
+function collectFeatureSignals(html: string, fallbackLabel: string) {
+  if (!html) return [fallbackLabel];
+
+  const textCandidates = [
+    ...Array.from(html.matchAll(/<(?:h[1-4]|strong|b|span|p|li)[^>]*>([\s\S]*?)<\/(?:h[1-4]|strong|b|span|p|li)>/gi)).map((match) =>
+      cleanText(decodeEntities(match[1].replace(/<[^>]+>/g, " "))),
+    ),
+    ...Array.from(html.matchAll(/(?:aria-label|title|alt)=["']([^"']{8,120})["']/gi)).map((match) => cleanText(decodeEntities(match[1]))),
+  ];
+
+  return unique(
+    textCandidates
+      .filter((text) => text.length >= 8 && text.length <= 120)
+      .filter((text) => /ai|agent|demo|video|record|export|dashboard|workflow|automate|analytics|campaign|builder|editor|template|collaborat|integrat|report|publish|share|create|generate|feature|product/i.test(text)),
+  ).slice(0, 8);
+}
+
 function collectLinks(html: string, base: string): ScanLink[] {
   const baseUrl = new URL(base);
   const links: ScanLink[] = [];
@@ -299,7 +316,7 @@ function collectLinks(html: string, base: string): ScanLink[] {
   return links.slice(0, 14);
 }
 
-async function detectAuthUrl(html: string, links: ScanLink[], base: string, signal: AbortSignal) {
+async function detectAuthUrl(html: string, links: ScanLink[], base: string) {
   const found = links.find((link) => isAuthCandidate(`${link.label} ${link.url}`));
   if (found) return found.url;
 
@@ -321,13 +338,7 @@ async function detectAuthUrl(html: string, links: ScanLink[], base: string, sign
   for (const path of commonPaths) {
     try {
       const url = new URL(path, baseUrl).toString().replace(/\/$/, "");
-      const response = await fetch(url, {
-        method: "GET",
-        signal,
-        headers: { accept: "text/html,application/xhtml+xml", "user-agent": "DemoForgeBot/1.0 (+https://lovable.dev)" },
-      });
-      if (!response.ok) continue;
-      const body = (await response.text()).slice(0, 80_000);
+      const body = (await fetchHtml(url, 3500)).slice(0, 80_000);
       const text = stripHtml(body).toLowerCase();
       const title = getTagText(body, "title").toLowerCase();
       let score = commonPaths.length - commonPaths.indexOf(path);
