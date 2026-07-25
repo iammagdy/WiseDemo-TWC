@@ -25,11 +25,21 @@ function AuthPage() {
 
   useEffect(() => {
     let alive = true;
+    // 1) If already signed in, jump straight in.
     supabase.auth.getSession().then(({ data }) => {
       if (alive && data.session) navigate({ to: "/dashboard", replace: true });
     });
+    // 2) Also react when the OAuth popup finishes and sets the session
+    //    after signInWithOAuth has already returned.
+    const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
+      if (!alive) return;
+      if ((event === "SIGNED_IN" || event === "INITIAL_SESSION") && session) {
+        navigate({ to: "/dashboard", replace: true });
+      }
+    });
     return () => {
       alive = false;
+      sub.subscription.unsubscribe();
     };
   }, [navigate]);
 
