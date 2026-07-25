@@ -1,5 +1,10 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import { useServerFn } from "@tanstack/react-start";
+import { ArrowRight, Loader2, LogOut, Plus, Video } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
+
+import { Button } from "@/components/ui/button";
+import { createProject } from "@/lib/studio.functions";
 import { supabase } from "@/integrations/supabase/client";
 
 export const Route = createFileRoute("/_authenticated/dashboard")({
@@ -7,6 +12,8 @@ export const Route = createFileRoute("/_authenticated/dashboard")({
     meta: [
       { title: "Dashboard — DemoForge" },
       { name: "description", content: "Your DemoForge projects, demos, and render queue." },
+      { property: "og:title", content: "Dashboard — DemoForge" },
+      { property: "og:description", content: "Your DemoForge projects, demos, and render queue." },
     ],
   }),
   component: Dashboard,
@@ -55,12 +62,14 @@ function Dashboard() {
           </Link>
           <div className="flex items-center gap-3 text-sm">
             <span className="hidden text-muted-foreground md:inline">{user?.email}</span>
-            <button
+            <Button
+              variant="outline"
+              size="sm"
               onClick={signOut}
-              className="rounded-md border border-border px-3 py-1.5 text-sm hover:border-primary/60"
             >
+              <LogOut />
               Sign out
-            </button>
+            </Button>
           </div>
         </div>
       </header>
@@ -71,12 +80,12 @@ function Dashboard() {
             <p className="font-mono-tight text-xs uppercase tracking-widest text-primary">/// Call sheet</p>
             <h1 className="mt-2 text-3xl font-semibold tracking-tight md:text-4xl">Your productions</h1>
           </div>
-          <button
+          <Button
             onClick={() => setOpen(true)}
-            className="rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground shadow-[var(--shadow-glow)] transition hover:opacity-90"
           >
-            + New project
-          </button>
+            <Plus />
+            New project
+          </Button>
         </div>
 
         <div className="mt-10">
@@ -91,13 +100,22 @@ function Dashboard() {
               {projects.map((p) => (
                 <li
                   key={p.id}
-                  className="rounded-xl border border-border bg-card p-5 transition hover:border-primary/50"
+                  className="rounded-xl border border-border bg-card transition hover:border-primary/50"
                 >
-                  <div className="font-mono-tight text-[11px] uppercase text-muted-foreground">
-                    {new Date(p.created_at).toLocaleDateString()}
-                  </div>
-                  <div className="mt-1 text-lg font-semibold tracking-tight">{p.name}</div>
-                  <div className="mt-1 truncate text-sm text-muted-foreground">{p.base_url}</div>
+                  <Link to="/projects/$projectId" params={{ projectId: p.id }} className="block p-5">
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="min-w-0">
+                        <div className="font-mono-tight text-[11px] uppercase text-muted-foreground">
+                          {new Date(p.created_at).toLocaleDateString()}
+                        </div>
+                        <div className="mt-1 truncate text-lg font-semibold">{p.name}</div>
+                        <div className="mt-1 truncate text-sm text-muted-foreground">{p.base_url}</div>
+                      </div>
+                      <span className="mt-2 rounded-md border border-border p-2 text-muted-foreground">
+                        <ArrowRight className="h-4 w-4" />
+                      </span>
+                    </div>
+                  </Link>
                 </li>
               ))}
             </ul>
@@ -112,7 +130,6 @@ function Dashboard() {
             setOpen(false);
             await loadProjects();
           }}
-          ownerId={user!.id}
         />
       )}
     </div>
@@ -123,24 +140,19 @@ function EmptyState({ onNew }: { onNew: () => void }) {
   return (
     <div className="relative overflow-hidden rounded-2xl border border-dashed border-border bg-card/40 p-12 text-center">
       <div className="mx-auto mb-4 inline-flex h-12 w-12 items-center justify-center rounded-full bg-primary/15 text-primary">
-        <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2">
-          <rect x="2" y="7" width="14" height="10" rx="2" />
-          <path d="M16 10l6-3v10l-6-3z" />
-        </svg>
+        <Video className="h-5 w-5" />
       </div>
       <h2 className="text-xl font-semibold tracking-tight">The set is empty.</h2>
       <p className="mx-auto mt-2 max-w-sm text-sm text-muted-foreground">
         Add your first SaaS URL and DemoForge will map, script, and film a 60-second cut.
       </p>
-      <button
+      <Button
         onClick={onNew}
-        className="mt-6 inline-flex rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground shadow-[var(--shadow-glow)] transition hover:opacity-90"
+        className="mt-6"
       >
-        + Start your first project
-      </button>
-      <p className="mt-4 font-mono-tight text-[11px] uppercase tracking-widest text-muted-foreground">
-        Recording engine wires up next release
-      </p>
+        <Plus />
+        Start your first project
+      </Button>
     </div>
   );
 }
@@ -148,12 +160,12 @@ function EmptyState({ onNew }: { onNew: () => void }) {
 function NewProjectDialog({
   onClose,
   onCreated,
-  ownerId,
 }: {
   onClose: () => void;
   onCreated: () => void;
-  ownerId: string;
 }) {
+  const navigate = useNavigate();
+  const createProjectAction = useServerFn(createProject);
   const [name, setName] = useState("");
   const [url, setUrl] = useState("");
   const [saving, setSaving] = useState(false);
@@ -164,15 +176,9 @@ function NewProjectDialog({
     setSaving(true);
     setError(null);
     try {
-      const clean = url.trim().replace(/^https?:\/\//i, "");
-      const finalUrl = `https://${clean}`;
-      const { error } = await supabase.from("projects").insert({
-        owner_id: ownerId,
-        name: name.trim(),
-        base_url: finalUrl,
-      });
-      if (error) throw error;
+      const project = await createProjectAction({ data: { name, baseUrl: url } });
       onCreated();
+      navigate({ to: "/projects/$projectId", params: { projectId: project.id } });
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to create project");
     } finally {
@@ -237,20 +243,20 @@ function NewProjectDialog({
         </div>
 
         <div className="mt-6 flex justify-end gap-2">
-          <button
+          <Button
             type="button"
+            variant="outline"
             onClick={onClose}
-            className="rounded-lg border border-border px-4 py-2 text-sm hover:border-primary/60"
           >
             Cancel
-          </button>
-          <button
+          </Button>
+          <Button
             type="submit"
             disabled={saving}
-            className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground shadow-[var(--shadow-glow)] transition hover:opacity-90 disabled:opacity-50"
           >
+            {saving ? <Loader2 className="animate-spin" /> : <Plus />}
             {saving ? "Creating…" : "Create project"}
-          </button>
+          </Button>
         </div>
       </form>
     </div>
