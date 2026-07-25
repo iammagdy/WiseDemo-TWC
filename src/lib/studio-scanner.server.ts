@@ -26,24 +26,9 @@ export function normalizePublicUrl(input: string): string {
 
 export async function scanWebsite(url: string, projectName: string): Promise<WebsiteScan> {
   const normalizedUrl = normalizePublicUrl(url);
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 8000);
 
   try {
-    const response = await fetch(normalizedUrl, {
-      signal: controller.signal,
-      headers: {
-        accept: "text/html,application/xhtml+xml",
-        "user-agent": "DemoForgeBot/1.0 (+https://lovable.dev)",
-      },
-    });
-
-    if (!response.ok) {
-      throw new Error(`The site returned ${response.status}.`);
-    }
-
-    const rawHtml = await response.text();
-    const html = rawHtml.slice(0, 700_000);
+    const html = await fetchHtml(normalizedUrl, 9000);
     const textOnly = stripHtml(html);
     const title = getTagText(html, "title") || getHeading(html, 1) || projectName;
     const description =
@@ -51,22 +36,34 @@ export async function scanWebsite(url: string, projectName: string): Promise<Web
       getMetaContent(html, "og:description") ||
       sentenceFromText(textOnly) ||
       `${projectName} product experience.`;
-    const headings = collectHeadings(html);
-    const actions = collectActions(html);
-    const links = collectLinks(html, normalizedUrl);
-    const authUrl = await detectAuthUrl(html, links, normalizedUrl, controller.signal);
+    const homeLinks = collectLinks(html, normalizedUrl);
+    const sitemapLinks = await discoverSitemapLinks(normalizedUrl);
+    const candidateLinks = prioritizeLinks([...homeLinks, ...sitemapLinks], normalizedUrl).slice(0, 8);
+    const scannedPages = await Promise.all(
+      candidateLinks.map(async (link) => {
+        try {
+          return { link, html: link.url === normalizedUrl ? html : await fetchHtml(link.url, 5500) };
+        } catch {
+          return { link, html: "" };
+        }
+      }),
+    );
+
+    const headings = unique(scannedPages.flatMap((page) => (page.html ? collectHeadings(page.html) : [page.link.label]))).slice(0, 18);
+    const actions = unique(scannedPages.flatMap((page) => (page.html ? collectActions(page.html) : []))).slice(0, 16);
+    const features = unique(scannedPages.flatMap((page) => collectFeatureSignals(page.html, page.link.label))).slice(0, 14);
+    const links = mergeScanLinks([{ label: "Start page", url: normalizedUrl }, ...homeLinks, ...sitemapLinks, ...candidateLinks]).slice(0, 24);
+    const authUrl = await detectAuthUrl(html, links, normalizedUrl);
 
     return {
       title: cleanText(title).slice(0, 120),
       description: cleanText(description).slice(0, 700),
       links,
       authUrl,
-      siteMapMd: buildSiteMap({ projectName, normalizedUrl, title, description, headings, actions, links, authUrl }),
+      siteMapMd: buildSiteMap({ projectName, normalizedUrl, title, description, headings, actions, features, links, authUrl }),
     };
   } catch {
     return buildFallbackScan(normalizedUrl, projectName);
-  } finally {
-    clearTimeout(timeout);
   }
 }
 
