@@ -1,5 +1,5 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 
 export const Route = createFileRoute("/_authenticated/dashboard")({
@@ -23,14 +23,19 @@ function Dashboard() {
   const navigate = useNavigate();
   const { user } = Route.useRouteContext();
   const [projects, setProjects] = useState<ProjectRow[] | null>(null);
+  const [open, setOpen] = useState(false);
 
-  useEffect(() => {
-    supabase
+  const loadProjects = useCallback(async () => {
+    const { data } = await supabase
       .from("projects")
       .select("id, name, base_url, created_at")
-      .order("created_at", { ascending: false })
-      .then(({ data }) => setProjects((data as ProjectRow[]) ?? []));
+      .order("created_at", { ascending: false });
+    setProjects((data as ProjectRow[]) ?? []);
   }, []);
+
+  useEffect(() => {
+    void loadProjects();
+  }, [loadProjects]);
 
   async function signOut() {
     await supabase.auth.signOut();
@@ -66,7 +71,10 @@ function Dashboard() {
             <p className="font-mono-tight text-xs uppercase tracking-widest text-primary">/// Call sheet</p>
             <h1 className="mt-2 text-3xl font-semibold tracking-tight md:text-4xl">Your productions</h1>
           </div>
-          <button className="hidden rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground shadow-[var(--shadow-glow)] transition hover:opacity-90 md:inline-flex">
+          <button
+            onClick={() => setOpen(true)}
+            className="rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground shadow-[var(--shadow-glow)] transition hover:opacity-90"
+          >
             + New project
           </button>
         </div>
@@ -77,7 +85,7 @@ function Dashboard() {
               Loading dailies…
             </div>
           ) : projects.length === 0 ? (
-            <EmptyState />
+            <EmptyState onNew={() => setOpen(true)} />
           ) : (
             <ul className="grid gap-4 md:grid-cols-2">
               {projects.map((p) => (
@@ -96,11 +104,22 @@ function Dashboard() {
           )}
         </div>
       </main>
+
+      {open && (
+        <NewProjectDialog
+          onClose={() => setOpen(false)}
+          onCreated={async () => {
+            setOpen(false);
+            await loadProjects();
+          }}
+          ownerId={user!.id}
+        />
+      )}
     </div>
   );
 }
 
-function EmptyState() {
+function EmptyState({ onNew }: { onNew: () => void }) {
   return (
     <div className="relative overflow-hidden rounded-2xl border border-dashed border-border bg-card/40 p-12 text-center">
       <div className="mx-auto mb-4 inline-flex h-12 w-12 items-center justify-center rounded-full bg-primary/15 text-primary">
@@ -113,12 +132,127 @@ function EmptyState() {
       <p className="mx-auto mt-2 max-w-sm text-sm text-muted-foreground">
         Add your first SaaS URL and DemoForge will map, script, and film a 60-second cut.
       </p>
-      <button className="mt-6 inline-flex rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground shadow-[var(--shadow-glow)] transition hover:opacity-90">
+      <button
+        onClick={onNew}
+        className="mt-6 inline-flex rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground shadow-[var(--shadow-glow)] transition hover:opacity-90"
+      >
         + Start your first project
       </button>
       <p className="mt-4 font-mono-tight text-[11px] uppercase tracking-widest text-muted-foreground">
         Recording engine wires up next release
       </p>
+    </div>
+  );
+}
+
+function NewProjectDialog({
+  onClose,
+  onCreated,
+  ownerId,
+}: {
+  onClose: () => void;
+  onCreated: () => void;
+  ownerId: string;
+}) {
+  const [name, setName] = useState("");
+  const [url, setUrl] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setSaving(true);
+    setError(null);
+    try {
+      const clean = url.trim().replace(/^https?:\/\//i, "");
+      const finalUrl = `https://${clean}`;
+      const { error } = await supabase.from("projects").insert({
+        owner_id: ownerId,
+        name: name.trim(),
+        base_url: finalUrl,
+      });
+      if (error) throw error;
+      onCreated();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to create project");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4 backdrop-blur"
+      onClick={onClose}
+    >
+      <form
+        onClick={(e) => e.stopPropagation()}
+        onSubmit={submit}
+        className="w-full max-w-md rounded-2xl border border-border bg-card p-6 shadow-[var(--shadow-glow)]"
+      >
+        <p className="font-mono-tight text-[11px] uppercase tracking-widest text-primary">
+          /// New production
+        </p>
+        <h2 className="mt-2 text-xl font-semibold tracking-tight">Add a project</h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          We'll map the site next. You can add login credentials later.
+        </p>
+
+        <div className="mt-5 space-y-3">
+          <label className="block">
+            <span className="mb-1.5 block font-mono-tight text-[11px] uppercase tracking-widest text-muted-foreground">
+              Project name
+            </span>
+            <input
+              autoFocus
+              required
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Acme Analytics"
+              className="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm outline-none focus:border-primary/60 focus:ring-2 focus:ring-primary/20"
+            />
+          </label>
+          <label className="block">
+            <span className="mb-1.5 block font-mono-tight text-[11px] uppercase tracking-widest text-muted-foreground">
+              Site URL
+            </span>
+            <div className="flex items-center rounded-lg border border-border bg-background focus-within:border-primary/60 focus-within:ring-2 focus-within:ring-primary/20">
+              <span className="pl-3 font-mono-tight text-xs text-muted-foreground">https://</span>
+              <input
+                required
+                value={url}
+                onChange={(e) => setUrl(e.target.value)}
+                placeholder="yoursaas.com"
+                className="flex-1 bg-transparent px-2 py-2.5 text-sm outline-none"
+                autoComplete="off"
+                spellCheck={false}
+              />
+            </div>
+          </label>
+          {error && (
+            <p className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive-foreground">
+              {error}
+            </p>
+          )}
+        </div>
+
+        <div className="mt-6 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-lg border border-border px-4 py-2 text-sm hover:border-primary/60"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            disabled={saving}
+            className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground shadow-[var(--shadow-glow)] transition hover:opacity-90 disabled:opacity-50"
+          >
+            {saving ? "Creating…" : "Create project"}
+          </button>
+        </div>
+      </form>
     </div>
   );
 }
