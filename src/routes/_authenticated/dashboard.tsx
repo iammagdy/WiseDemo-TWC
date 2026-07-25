@@ -15,7 +15,7 @@ export const Route = createFileRoute("/_authenticated/dashboard")({
 type ProjectRow = {
   id: string;
   name: string;
-  url: string;
+  base_url: string;
   created_at: string;
 };
 
@@ -27,7 +27,7 @@ function Dashboard() {
   useEffect(() => {
     supabase
       .from("projects")
-      .select("id, name, url, created_at")
+      .select("id, name, base_url, created_at")
       .order("created_at", { ascending: false })
       .then(({ data }) => setProjects((data as ProjectRow[]) ?? []));
   }, []);
@@ -89,7 +89,7 @@ function Dashboard() {
                     {new Date(p.created_at).toLocaleDateString()}
                   </div>
                   <div className="mt-1 text-lg font-semibold tracking-tight">{p.name}</div>
-                  <div className="mt-1 truncate text-sm text-muted-foreground">{p.url}</div>
+                  <div className="mt-1 truncate text-sm text-muted-foreground">{p.base_url}</div>
                 </li>
               ))}
             </ul>
