@@ -21,8 +21,8 @@ export const Route = createFileRoute("/api/public/screenshot")({
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 12000);
         const sources = [
-          `https://image.thum.io/get/width/${width}/crop/720/noanimate/${encodeURI(targetUrl.toString())}`,
           `https://s.wordpress.com/mshots/v1/${encodeURIComponent(targetUrl.toString())}?w=${width}`,
+          `https://image.thum.io/get/width/${width}/crop/720/noanimate/${encodeURI(targetUrl.toString())}`,
         ];
 
         try {
@@ -30,7 +30,9 @@ export const Route = createFileRoute("/api/public/screenshot")({
             const response = await fetch(source, { signal: controller.signal });
             const contentType = response.headers.get("content-type") ?? "";
             if (response.ok && contentType.startsWith("image/")) {
-              return new Response(response.body, {
+              const body = await response.arrayBuffer();
+              if (body.byteLength < 4000) continue;
+              return new Response(body, {
                 headers: {
                   "content-type": contentType,
                   "cache-control": "public, max-age=900",
@@ -52,7 +54,7 @@ export const Route = createFileRoute("/api/public/screenshot")({
 
 function svgFallback(message: string, status: number) {
   const safeMessage = message.replace(/[<>&"]/g, "");
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720"><rect width="1280" height="720" fill="#111"/><circle cx="640" cy="304" r="52" fill="#ff5a1f" opacity="0.9"/><text x="640" y="400" text-anchor="middle" fill="#f5f5f5" font-family="Arial, sans-serif" font-size="34" font-weight="700">DemoForge capture</text><text x="640" y="448" text-anchor="middle" fill="#b8b8b8" font-family="Arial, sans-serif" font-size="22">${safeMessage}</text></svg>`;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720"><defs><linearGradient id="bg" x1="0" x2="1" y1="0" y2="1"><stop stop-color="#100d0b"/><stop offset="0.58" stop-color="#24150f"/><stop offset="1" stop-color="#ff4f00"/></linearGradient></defs><rect width="1280" height="720" fill="url(#bg)"/><rect x="96" y="92" width="1088" height="536" rx="24" fill="#f7f2ec"/><rect x="96" y="92" width="1088" height="58" rx="24" fill="#16110e"/><circle cx="134" cy="121" r="9" fill="#ff4f00"/><circle cx="164" cy="121" r="9" fill="#f2b84b"/><circle cx="194" cy="121" r="9" fill="#2ac769"/><rect x="150" y="214" width="520" height="34" rx="10" fill="#16110e"/><rect x="150" y="282" width="830" height="20" rx="10" fill="#6f645e" opacity="0.45"/><rect x="150" y="326" width="720" height="20" rx="10" fill="#6f645e" opacity="0.35"/><rect x="150" y="394" width="210" height="58" rx="12" fill="#ff4f00"/><rect x="150" y="514" width="900" height="34" rx="12" fill="#ffffff" opacity="0.85"/><text x="640" y="578" text-anchor="middle" fill="#2a201b" font-family="Arial, sans-serif" font-size="28" font-weight="700">DemoForge capture</text><text x="640" y="616" text-anchor="middle" fill="#6f645e" font-family="Arial, sans-serif" font-size="18">${safeMessage}</text></svg>`;
   return new Response(svg, {
     status,
     headers: {

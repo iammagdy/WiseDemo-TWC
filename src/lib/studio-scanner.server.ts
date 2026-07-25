@@ -26,24 +26,9 @@ export function normalizePublicUrl(input: string): string {
 
 export async function scanWebsite(url: string, projectName: string): Promise<WebsiteScan> {
   const normalizedUrl = normalizePublicUrl(url);
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 8000);
 
   try {
-    const response = await fetch(normalizedUrl, {
-      signal: controller.signal,
-      headers: {
-        accept: "text/html,application/xhtml+xml",
-        "user-agent": "DemoForgeBot/1.0 (+https://lovable.dev)",
-      },
-    });
-
-    if (!response.ok) {
-      throw new Error(`The site returned ${response.status}.`);
-    }
-
-    const rawHtml = await response.text();
-    const html = rawHtml.slice(0, 700_000);
+    const html = await fetchHtml(normalizedUrl, 9000);
     const textOnly = stripHtml(html);
     const title = getTagText(html, "title") || getHeading(html, 1) || projectName;
     const description =
@@ -51,22 +36,34 @@ export async function scanWebsite(url: string, projectName: string): Promise<Web
       getMetaContent(html, "og:description") ||
       sentenceFromText(textOnly) ||
       `${projectName} product experience.`;
-    const headings = collectHeadings(html);
-    const actions = collectActions(html);
-    const links = collectLinks(html, normalizedUrl);
-    const authUrl = await detectAuthUrl(html, links, normalizedUrl, controller.signal);
+    const homeLinks = collectLinks(html, normalizedUrl);
+    const sitemapLinks = await discoverSitemapLinks(normalizedUrl);
+    const candidateLinks = prioritizeLinks([...homeLinks, ...sitemapLinks], normalizedUrl).slice(0, 8);
+    const scannedPages = await Promise.all(
+      candidateLinks.map(async (link) => {
+        try {
+          return { link, html: link.url === normalizedUrl ? html : await fetchHtml(link.url, 5500) };
+        } catch {
+          return { link, html: "" };
+        }
+      }),
+    );
+
+    const headings = unique(scannedPages.flatMap((page) => (page.html ? collectHeadings(page.html) : [page.link.label]))).slice(0, 18);
+    const actions = unique(scannedPages.flatMap((page) => (page.html ? collectActions(page.html) : []))).slice(0, 16);
+    const features = unique(scannedPages.flatMap((page) => collectFeatureSignals(page.html, page.link.label))).slice(0, 14);
+    const links = mergeScanLinks([{ label: "Start page", url: normalizedUrl }, ...homeLinks, ...sitemapLinks, ...candidateLinks]).slice(0, 24);
+    const authUrl = await detectAuthUrl(html, links, normalizedUrl);
 
     return {
       title: cleanText(title).slice(0, 120),
       description: cleanText(description).slice(0, 700),
       links,
       authUrl,
-      siteMapMd: buildSiteMap({ projectName, normalizedUrl, title, description, headings, actions, links, authUrl }),
+      siteMapMd: buildSiteMap({ projectName, normalizedUrl, title, description, headings, actions, features, links, authUrl }),
     };
   } catch {
     return buildFallbackScan(normalizedUrl, projectName);
-  } finally {
-    clearTimeout(timeout);
   }
 }
 
@@ -83,6 +80,7 @@ function buildFallbackScan(url: string, projectName: string): WebsiteScan {
       description: `${projectName} product experience captured from ${url}.`,
       headings: [],
       actions: ["Open product", "Review main call to action", "Show result"],
+      features: ["Main product experience", "Primary call to action", "Final value screen"],
       links: [{ label: "Start page", url }],
       authUrl: null,
     }),
@@ -96,6 +94,7 @@ function buildSiteMap(input: {
   description: string;
   headings: string[];
   actions: string[];
+  features: string[];
   links: ScanLink[];
   authUrl: string | null;
 }) {
@@ -104,6 +103,7 @@ function buildSiteMap(input: {
     .map((link) => `- ${link.label}: ${link.url}`)
     .join("\n");
   const headingLines = input.headings.slice(0, 10).map((heading) => `- ${heading}`).join("\n") || "- Main product screen";
+  const featureLines = input.features.slice(0, 12).map((feature) => `- ${feature}`).join("\n") || "- Main product experience";
   const actionLines = input.actions.slice(0, 10).map((action) => `- ${action}`).join("\n") || "- Open the product\n- Show the primary call to action\n- End on the most visual proof screen";
 
   return `# ${input.projectName} product map
@@ -120,6 +120,9 @@ ${pageLines}
 ## Important visible sections
 ${headingLines}
 
+## Features and product signals
+${featureLines}
+
 ## Clicks and calls to action to film
 ${actionLines}
 
@@ -134,6 +137,92 @@ ${input.authUrl ? `- Detected login page: ${input.authUrl}` : "- No dedicated lo
 5. Highlight the result, export, dashboard, or proof screen.
 6. Keep the final video under 69 seconds and avoid invented product states.
 `;
+}
+
+async function fetchHtml(url: string, timeoutMs: number) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(url, {
+      signal: controller.signal,
+      redirect: "follow",
+      headers: {
+        accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "user-agent": "Mozilla/5.0 (compatible; DemoForgeBot/1.0; +https://lovable.dev)",
+      },
+    });
+
+    if (!response.ok) throw new Error(`The site returned ${response.status}.`);
+    const contentType = response.headers.get("content-type") ?? "";
+    if (contentType && !/html|xml|text/i.test(contentType)) throw new Error("The URL did not return readable page content.");
+    return (await response.text()).slice(0, 700_000);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function discoverSitemapLinks(base: string): Promise<ScanLink[]> {
+  const baseUrl = new URL(base);
+  const sitemapUrls = [new URL("/sitemap.xml", baseUrl).toString(), new URL("/sitemap_index.xml", baseUrl).toString()];
+  const links: ScanLink[] = [];
+
+  for (const sitemapUrl of sitemapUrls) {
+    try {
+      const xml = await fetchHtml(sitemapUrl, 4500);
+      for (const match of xml.matchAll(/<loc>\s*([^<]+)\s*<\/loc>/gi)) {
+        const loc = decodeEntities(match[1]);
+        const url = new URL(loc, baseUrl);
+        if (url.origin !== baseUrl.origin) continue;
+        url.hash = "";
+        const normalized = url.toString().replace(/\/$/, "");
+        links.push({ label: labelFromPath(url.pathname), url: normalized });
+        if (links.length >= 28) break;
+      }
+    } catch {
+      // Many apps do not expose a sitemap; home-page links still work.
+    }
+  }
+
+  return mergeScanLinks(links);
+}
+
+function prioritizeLinks(links: ScanLink[], base: string): ScanLink[] {
+  const baseUrl = new URL(base);
+  return mergeScanLinks(links)
+    .filter((link) => {
+      try {
+        const url = new URL(link.url);
+        return url.origin === baseUrl.origin && !/\.(png|jpe?g|gif|webp|svg|pdf|zip|mp4|webm)$/i.test(url.pathname);
+      } catch {
+        return false;
+      }
+    })
+    .sort((a, b) => linkScore(b) - linkScore(a));
+}
+
+function linkScore(link: ScanLink) {
+  const value = `${link.label} ${link.url}`.toLowerCase();
+  let score = 0;
+  if (/feature|product|solution|use-case|workflow|dashboard|app|demo|pricing|customer|case|integrations/.test(value)) score += 30;
+  if (/auth|login|signin|sign-in|account/.test(value)) score += 18;
+  if (/blog|privacy|terms|legal|cookie|status|docs\/api|changelog/.test(value)) score -= 30;
+  score -= Math.min(12, new URL(link.url).pathname.split("/").filter(Boolean).length * 2);
+  return score;
+}
+
+function mergeScanLinks(links: ScanLink[]) {
+  const seen = new Set<string>();
+  const merged: ScanLink[] = [];
+
+  for (const link of links) {
+    const normalized = link.url.replace(/\/$/, "");
+    if (seen.has(normalized)) continue;
+    seen.add(normalized);
+    merged.push({ label: cleanText(link.label || labelFromPath(new URL(normalized).pathname)).slice(0, 80), url: normalized });
+  }
+
+  return merged;
 }
 
 function stripHtml(html: string) {
@@ -185,6 +274,23 @@ function collectActions(html: string) {
   return unique(actions).slice(0, 12);
 }
 
+function collectFeatureSignals(html: string, fallbackLabel: string) {
+  if (!html) return [fallbackLabel];
+
+  const textCandidates = [
+    ...Array.from(html.matchAll(/<(?:h[1-4]|strong|b|span|p|li)[^>]*>([\s\S]*?)<\/(?:h[1-4]|strong|b|span|p|li)>/gi)).map((match) =>
+      cleanText(decodeEntities(match[1].replace(/<[^>]+>/g, " "))),
+    ),
+    ...Array.from(html.matchAll(/(?:aria-label|title|alt)=["']([^"']{8,120})["']/gi)).map((match) => cleanText(decodeEntities(match[1]))),
+  ];
+
+  return unique(
+    textCandidates
+      .filter((text) => text.length >= 8 && text.length <= 120)
+      .filter((text) => /ai|agent|demo|video|record|export|dashboard|workflow|automate|analytics|campaign|builder|editor|template|collaborat|integrat|report|publish|share|create|generate|feature|product/i.test(text)),
+  ).slice(0, 8);
+}
+
 function collectLinks(html: string, base: string): ScanLink[] {
   const baseUrl = new URL(base);
   const links: ScanLink[] = [];
@@ -210,7 +316,7 @@ function collectLinks(html: string, base: string): ScanLink[] {
   return links.slice(0, 14);
 }
 
-async function detectAuthUrl(html: string, links: ScanLink[], base: string, signal: AbortSignal) {
+async function detectAuthUrl(html: string, links: ScanLink[], base: string) {
   const found = links.find((link) => isAuthCandidate(`${link.label} ${link.url}`));
   if (found) return found.url;
 
@@ -232,13 +338,7 @@ async function detectAuthUrl(html: string, links: ScanLink[], base: string, sign
   for (const path of commonPaths) {
     try {
       const url = new URL(path, baseUrl).toString().replace(/\/$/, "");
-      const response = await fetch(url, {
-        method: "GET",
-        signal,
-        headers: { accept: "text/html,application/xhtml+xml", "user-agent": "DemoForgeBot/1.0 (+https://lovable.dev)" },
-      });
-      if (!response.ok) continue;
-      const body = (await response.text()).slice(0, 80_000);
+      const body = (await fetchHtml(url, 3500)).slice(0, 80_000);
       const text = stripHtml(body).toLowerCase();
       const title = getTagText(body, "title").toLowerCase();
       let score = commonPaths.length - commonPaths.indexOf(path);
