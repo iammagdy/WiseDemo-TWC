@@ -28,6 +28,9 @@ export async function scanWebsite(url: string, projectName: string): Promise<Web
   const normalizedUrl = normalizePublicUrl(url);
 
   try {
+    const firecrawlScan = await scanWithFirecrawl(normalizedUrl, projectName);
+    if (firecrawlScan) return firecrawlScan;
+
     const html = await fetchHtml(normalizedUrl, 9000);
     const textOnly = stripHtml(html);
     const title = getTagText(html, "title") || getHeading(html, 1) || projectName;
@@ -65,6 +68,132 @@ export async function scanWebsite(url: string, projectName: string): Promise<Web
   } catch {
     return buildFallbackScan(normalizedUrl, projectName);
   }
+}
+
+async function scanWithFirecrawl(baseUrl: string, projectName: string): Promise<WebsiteScan | null> {
+  const connectionKey = process.env.FIRECRAWL_API_KEY;
+  const lovableKey = process.env.LOVABLE_API_KEY;
+  if (!connectionKey || !lovableKey) return null;
+
+  try {
+    const [mapResult, scrapeResult] = await Promise.all([
+      callFirecrawl<{ success?: boolean; links?: string[]; data?: { links?: string[] } }>("/map", {
+        url: baseUrl,
+        limit: 40,
+        includeSubdomains: false,
+      }),
+      callFirecrawl<{
+        success?: boolean;
+        markdown?: string;
+        summary?: string;
+        metadata?: { title?: string; description?: string; sourceURL?: string };
+        data?: { markdown?: string; summary?: string; metadata?: { title?: string; description?: string; sourceURL?: string } };
+      }>("/scrape", {
+        url: baseUrl,
+        formats: ["markdown", "summary", "links"],
+        onlyMainContent: true,
+        waitFor: 1500,
+      }),
+    ]);
+
+    const metadata = scrapeResult.metadata ?? scrapeResult.data?.metadata;
+    const markdown = scrapeResult.markdown ?? scrapeResult.data?.markdown ?? "";
+    const summary = scrapeResult.summary ?? scrapeResult.data?.summary ?? "";
+    const title = metadata?.title || firstMarkdownHeading(markdown) || projectName;
+    const description = metadata?.description || summary || sentenceFromText(markdown) || `${projectName} product experience.`;
+    const mappedLinks = (mapResult.links ?? mapResult.data?.links ?? [])
+      .map((link) => toSameOriginLink(link, baseUrl))
+      .filter((link): link is ScanLink => Boolean(link));
+    const inlineLinks = extractMarkdownLinks(markdown, baseUrl);
+    const links = prioritizeLinks([{ label: "Start page", url: baseUrl }, ...mappedLinks, ...inlineLinks], baseUrl).slice(0, 24);
+    const headings = extractMarkdownHeadings(markdown);
+    const actions = extractMarkdownActions(markdown);
+    const features = extractMarkdownFeatures(markdown, description);
+    const authUrl = findAuthLink(links) ?? (await detectAuthUrl("", links, baseUrl));
+
+    return {
+      title: cleanText(title).slice(0, 120),
+      description: cleanText(description).slice(0, 700),
+      links: mergeScanLinks([{ label: "Start page", url: baseUrl }, ...links]).slice(0, 24),
+      authUrl,
+      siteMapMd: buildSiteMap({ projectName, normalizedUrl: baseUrl, title, description, headings, actions, features, links, authUrl }),
+    };
+  } catch (error) {
+    console.warn("Firecrawl scan failed; using direct scanner fallback", error instanceof Error ? error.message : error);
+    return null;
+  }
+}
+
+async function callFirecrawl<T>(path: "/map" | "/scrape", body: Record<string, unknown>): Promise<T> {
+  const connectionKey = process.env.FIRECRAWL_API_KEY;
+  const lovableKey = process.env.LOVABLE_API_KEY;
+  if (!connectionKey || !lovableKey) throw new Error("Firecrawl is not connected.");
+
+  const response = await fetch(`https://connector-gateway.lovable.dev/firecrawl/v2${path}`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${lovableKey}`,
+      "x-connection-api-key": connectionKey,
+    },
+    body: JSON.stringify(body),
+  });
+
+  const text = await response.text();
+  if (!response.ok) throw new Error(`Firecrawl request failed [${response.status}]: ${text.slice(0, 400)}`);
+  return JSON.parse(text) as T;
+}
+
+function toSameOriginLink(value: string, base: string): ScanLink | null {
+  try {
+    const baseUrl = new URL(base);
+    const url = new URL(value, baseUrl);
+    if (url.origin !== baseUrl.origin) return null;
+    url.hash = "";
+    return { label: labelFromPath(url.pathname), url: url.toString().replace(/\/$/, "") };
+  } catch {
+    return null;
+  }
+}
+
+function firstMarkdownHeading(markdown: string) {
+  return markdown.match(/^#\s+(.+)$/m)?.[1]?.trim() ?? "";
+}
+
+function extractMarkdownLinks(markdown: string, base: string) {
+  const links: ScanLink[] = [];
+  for (const match of markdown.matchAll(/\[([^\]]{1,90})\]\(([^)]+)\)/g)) {
+    const link = toSameOriginLink(match[2], base);
+    if (link) links.push({ ...link, label: cleanText(match[1]) || link.label });
+  }
+  return mergeScanLinks(links);
+}
+
+function extractMarkdownHeadings(markdown: string) {
+  return unique(
+    Array.from(markdown.matchAll(/^#{1,3}\s+(.+)$/gm))
+      .map((match) => cleanText(match[1]))
+      .filter((text) => text.length > 2 && text.length < 120),
+  ).slice(0, 18);
+}
+
+function extractMarkdownActions(markdown: string) {
+  return unique(
+    markdown
+      .split(/\n+/)
+      .map((line) => cleanText(line.replace(/^[-*#\s]+/, "")))
+      .filter((text) => text.length > 2 && text.length < 90)
+      .filter((text) => /start|try|demo|sign|login|create|book|join|launch|get|export|dashboard|pricing|learn|contact|download|share|publish/i.test(text)),
+  ).slice(0, 16);
+}
+
+function extractMarkdownFeatures(markdown: string, description: string) {
+  return unique(
+    [description, ...markdown.split(/\n+/)]
+      .map((line) => cleanText(line.replace(/^[-*#\s]+/, "")))
+      .filter((text) => text.length >= 8 && text.length <= 130)
+      .filter((text) => /ai|agent|demo|video|record|export|dashboard|workflow|automate|analytics|campaign|builder|editor|template|collaborat|integrat|report|publish|share|create|generate|feature|product|customer|team|brand|content/i.test(text)),
+  ).slice(0, 14);
 }
 
 function buildFallbackScan(url: string, projectName: string): WebsiteScan {
