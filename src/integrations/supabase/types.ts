@@ -14,16 +14,349 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      demo_events: {
+        Row: {
+          created_at: string
+          demo_id: string
+          id: number
+          level: string
+          message: string | null
+          owner_id: string
+          step: string
+        }
+        Insert: {
+          created_at?: string
+          demo_id: string
+          id?: number
+          level?: string
+          message?: string | null
+          owner_id: string
+          step: string
+        }
+        Update: {
+          created_at?: string
+          demo_id?: string
+          id?: number
+          level?: string
+          message?: string | null
+          owner_id?: string
+          step?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "demo_events_demo_id_fkey"
+            columns: ["demo_id"]
+            isOneToOne: false
+            referencedRelation: "demos"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      demos: {
+        Row: {
+          browserbase_session_id: string | null
+          created_at: string
+          creatomate_render_id: string | null
+          current_step: string | null
+          duration_seconds: number | null
+          error_message: string | null
+          feature_prompt: string
+          id: string
+          is_public: boolean
+          mp4_url: string | null
+          owner_id: string
+          progress_pct: number
+          project_id: string
+          scene_script: Json | null
+          share_slug: string | null
+          status: Database["public"]["Enums"]["demo_status"]
+          thumbnail_url: string | null
+          title: string
+          updated_at: string
+        }
+        Insert: {
+          browserbase_session_id?: string | null
+          created_at?: string
+          creatomate_render_id?: string | null
+          current_step?: string | null
+          duration_seconds?: number | null
+          error_message?: string | null
+          feature_prompt: string
+          id?: string
+          is_public?: boolean
+          mp4_url?: string | null
+          owner_id: string
+          progress_pct?: number
+          project_id: string
+          scene_script?: Json | null
+          share_slug?: string | null
+          status?: Database["public"]["Enums"]["demo_status"]
+          thumbnail_url?: string | null
+          title: string
+          updated_at?: string
+        }
+        Update: {
+          browserbase_session_id?: string | null
+          created_at?: string
+          creatomate_render_id?: string | null
+          current_step?: string | null
+          duration_seconds?: number | null
+          error_message?: string | null
+          feature_prompt?: string
+          id?: string
+          is_public?: boolean
+          mp4_url?: string | null
+          owner_id?: string
+          progress_pct?: number
+          project_id?: string
+          scene_script?: Json | null
+          share_slug?: string | null
+          status?: Database["public"]["Enums"]["demo_status"]
+          thumbnail_url?: string | null
+          title?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "demos_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      profiles: {
+        Row: {
+          avatar_url: string | null
+          created_at: string
+          display_name: string | null
+          id: string
+          plan: Database["public"]["Enums"]["plan_tier"]
+          updated_at: string
+        }
+        Insert: {
+          avatar_url?: string | null
+          created_at?: string
+          display_name?: string | null
+          id: string
+          plan?: Database["public"]["Enums"]["plan_tier"]
+          updated_at?: string
+        }
+        Update: {
+          avatar_url?: string | null
+          created_at?: string
+          display_name?: string | null
+          id?: string
+          plan?: Database["public"]["Enums"]["plan_tier"]
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      project_credentials: {
+        Row: {
+          ciphertext: string | null
+          created_at: string
+          kind: Database["public"]["Enums"]["credential_kind"]
+          login_url: string | null
+          owner_id: string
+          project_id: string
+          updated_at: string
+          username_hint: string | null
+        }
+        Insert: {
+          ciphertext?: string | null
+          created_at?: string
+          kind?: Database["public"]["Enums"]["credential_kind"]
+          login_url?: string | null
+          owner_id: string
+          project_id: string
+          updated_at?: string
+          username_hint?: string | null
+        }
+        Update: {
+          ciphertext?: string | null
+          created_at?: string
+          kind?: Database["public"]["Enums"]["credential_kind"]
+          login_url?: string | null
+          owner_id?: string
+          project_id?: string
+          updated_at?: string
+          username_hint?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "project_credentials_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: true
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      projects: {
+        Row: {
+          base_url: string
+          created_at: string
+          description: string | null
+          id: string
+          name: string
+          owner_id: string
+          site_map_md: string | null
+          site_map_source: Database["public"]["Enums"]["site_map_source"] | null
+          site_map_updated_at: string | null
+          updated_at: string
+        }
+        Insert: {
+          base_url: string
+          created_at?: string
+          description?: string | null
+          id?: string
+          name: string
+          owner_id: string
+          site_map_md?: string | null
+          site_map_source?:
+            | Database["public"]["Enums"]["site_map_source"]
+            | null
+          site_map_updated_at?: string | null
+          updated_at?: string
+        }
+        Update: {
+          base_url?: string
+          created_at?: string
+          description?: string | null
+          id?: string
+          name?: string
+          owner_id?: string
+          site_map_md?: string | null
+          site_map_source?:
+            | Database["public"]["Enums"]["site_map_source"]
+            | null
+          site_map_updated_at?: string | null
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      subscriptions: {
+        Row: {
+          created_at: string
+          demos_used_this_period: number
+          period_end: string
+          period_start: string
+          plan: Database["public"]["Enums"]["plan_tier"]
+          status: string
+          stripe_customer_id: string | null
+          stripe_subscription_id: string | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          demos_used_this_period?: number
+          period_end?: string
+          period_start?: string
+          plan?: Database["public"]["Enums"]["plan_tier"]
+          status?: string
+          stripe_customer_id?: string | null
+          stripe_subscription_id?: string | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          demos_used_this_period?: number
+          period_end?: string
+          period_start?: string
+          plan?: Database["public"]["Enums"]["plan_tier"]
+          status?: string
+          stripe_customer_id?: string | null
+          stripe_subscription_id?: string | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      user_roles: {
+        Row: {
+          created_at: string
+          id: string
+          role: Database["public"]["Enums"]["app_role"]
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          role: Database["public"]["Enums"]["app_role"]
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          role?: Database["public"]["Enums"]["app_role"]
+          user_id?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
-      [_ in never]: never
+      project_credentials_public: {
+        Row: {
+          kind: Database["public"]["Enums"]["credential_kind"] | null
+          login_url: string | null
+          owner_id: string | null
+          project_id: string | null
+          updated_at: string | null
+          username_hint: string | null
+        }
+        Insert: {
+          kind?: Database["public"]["Enums"]["credential_kind"] | null
+          login_url?: string | null
+          owner_id?: string | null
+          project_id?: string | null
+          updated_at?: string | null
+          username_hint?: string | null
+        }
+        Update: {
+          kind?: Database["public"]["Enums"]["credential_kind"] | null
+          login_url?: string | null
+          owner_id?: string | null
+          project_id?: string | null
+          updated_at?: string | null
+          username_hint?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "project_credentials_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: true
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Functions: {
-      [_ in never]: never
+      has_role: {
+        Args: {
+          _role: Database["public"]["Enums"]["app_role"]
+          _user_id: string
+        }
+        Returns: boolean
+      }
     }
     Enums: {
-      [_ in never]: never
+      app_role: "admin" | "moderator" | "user"
+      credential_kind: "none" | "cookie" | "password"
+      demo_status:
+        | "pending"
+        | "scanning"
+        | "planning"
+        | "recording"
+        | "rendering"
+        | "ready"
+        | "failed"
+      plan_tier: "indie" | "director" | "studio"
+      site_map_source: "firecrawl" | "manual"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -150,6 +483,20 @@ export type CompositeTypes<
 
 export const Constants = {
   public: {
-    Enums: {},
+    Enums: {
+      app_role: ["admin", "moderator", "user"],
+      credential_kind: ["none", "cookie", "password"],
+      demo_status: [
+        "pending",
+        "scanning",
+        "planning",
+        "recording",
+        "rendering",
+        "ready",
+        "failed",
+      ],
+      plan_tier: ["indie", "director", "studio"],
+      site_map_source: ["firecrawl", "manual"],
+    },
   },
 } as const
