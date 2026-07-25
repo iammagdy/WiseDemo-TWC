@@ -126,8 +126,9 @@ async function scanWithFirecrawl(baseUrl: string, projectName: string): Promise<
 async function callFirecrawl<T>(path: "/map" | "/scrape", body: Record<string, unknown>): Promise<T> {
   const connectionKey = process.env.FIRECRAWL_API_KEY;
   const lovableKey = process.env.LOVABLE_API_KEY;
-  if (!connectionKey || !lovableKey) throw new Error("Firecrawl is not connected.");
+  if (!connectionKey) throw new Error("Firecrawl is not connected.");
   const isDirectProviderKey = connectionKey.startsWith("fc-");
+  if (!isDirectProviderKey && !lovableKey) throw new Error("Firecrawl gateway is not configured.");
   const endpoint = isDirectProviderKey
     ? `https://api.firecrawl.dev/v2${path}`
     : `https://connector-gateway.lovable.dev/firecrawl/v2${path}`;
