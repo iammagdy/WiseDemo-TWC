@@ -1,4 +1,4 @@
-import { createCipheriv, randomBytes } from "crypto";
+import { createCipheriv, createHash, randomBytes } from "crypto";
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 
@@ -207,12 +207,13 @@ export const saveProjectCredential = createServerFn({ method: "POST" })
       throw new Error("Enter a valid login URL.");
     }
 
-    const keyHex = process.env.DEMOFORGE_CREDS_KEY;
-    if (!keyHex || !/^[\da-f]{64}$/i.test(keyHex)) {
+    const keySecret = process.env.DEMOFORGE_CREDS_KEY;
+    if (!keySecret || keySecret.length < 32) {
       throw new Error("Credential encryption is not configured yet.");
     }
-
-    const key = Buffer.from(keyHex, "hex");
+    const key = /^[\da-f]{64}$/i.test(keySecret)
+      ? Buffer.from(keySecret, "hex")
+      : createHash("sha256").update(keySecret, "utf8").digest();
     const iv = randomBytes(12);
     const cipher = createCipheriv("aes-256-gcm", key, iv);
     const encrypted = Buffer.concat([
