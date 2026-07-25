@@ -72,8 +72,7 @@ export async function scanWebsite(url: string, projectName: string): Promise<Web
 
 async function scanWithFirecrawl(baseUrl: string, projectName: string): Promise<WebsiteScan | null> {
   const connectionKey = process.env.FIRECRAWL_API_KEY;
-  const lovableKey = process.env.LOVABLE_API_KEY;
-  if (!connectionKey || !lovableKey) return null;
+  if (!connectionKey) return null;
 
   try {
     const [mapResult, scrapeResult] = await Promise.all([
@@ -109,7 +108,7 @@ async function scanWithFirecrawl(baseUrl: string, projectName: string): Promise<
     const headings = extractMarkdownHeadings(markdown);
     const actions = extractMarkdownActions(markdown);
     const features = extractMarkdownFeatures(markdown, description);
-    const authUrl = findAuthLink(links) ?? (await detectAuthUrl("", links, baseUrl));
+    const authUrl = links.find((link) => isAuthCandidate(`${link.label} ${link.url}`))?.url ?? (await detectAuthUrl("", links, baseUrl));
 
     return {
       title: cleanText(title).slice(0, 120),
@@ -128,14 +127,19 @@ async function callFirecrawl<T>(path: "/map" | "/scrape", body: Record<string, u
   const connectionKey = process.env.FIRECRAWL_API_KEY;
   const lovableKey = process.env.LOVABLE_API_KEY;
   if (!connectionKey || !lovableKey) throw new Error("Firecrawl is not connected.");
+  const isDirectProviderKey = connectionKey.startsWith("fc-");
+  const endpoint = isDirectProviderKey
+    ? `https://api.firecrawl.dev/v2${path}`
+    : `https://connector-gateway.lovable.dev/firecrawl/v2${path}`;
+  const headers: Record<string, string> = {
+    "content-type": "application/json",
+    authorization: `Bearer ${isDirectProviderKey ? connectionKey : lovableKey}`,
+  };
+  if (!isDirectProviderKey) headers["x-connection-api-key"] = connectionKey;
 
-  const response = await fetch(`https://connector-gateway.lovable.dev/firecrawl/v2${path}`, {
+  const response = await fetch(endpoint, {
     method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${lovableKey}`,
-      "x-connection-api-key": connectionKey,
-    },
+    headers,
     body: JSON.stringify(body),
   });
 

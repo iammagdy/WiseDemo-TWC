@@ -30,6 +30,11 @@ export const Route = createFileRoute("/_authenticated/projects/$projectId")({
 
 type Workspace = Awaited<ReturnType<typeof getProjectWorkspace>>;
 type Demo = Workspace["demos"][number];
+type RenderedVideo = {
+  url: string;
+  blob: Blob;
+  mimeType: string;
+};
 
 function ProjectStudio() {
   const { projectId } = Route.useParams();
@@ -51,7 +56,7 @@ function ProjectStudio() {
   const [featurePrompt, setFeaturePrompt] = useState("");
   const [busyAction, setBusyAction] = useState<"map" | "creds" | "demo" | "scan" | null>(null);
   const [renderingDemoId, setRenderingDemoId] = useState<string | null>(null);
-  const [renderedVideos, setRenderedVideos] = useState<Record<string, string>>({});
+  const [renderedVideos, setRenderedVideos] = useState<Record<string, RenderedVideo>>({});
   const [notice, setNotice] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -162,8 +167,8 @@ function ProjectStudio() {
     setNotice(null);
     setError(null);
     try {
-      const videoUrl = await renderDemoVideo({ project: workspace.project, demo });
-      setRenderedVideos((current) => ({ ...current, [demo.id]: videoUrl }));
+      const video = await renderDemoVideo({ project: workspace.project, demo });
+      setRenderedVideos((current) => ({ ...current, [demo.id]: video }));
       setNotice("Real demo video rendered. Download it from the demo queue.");
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Could not render the browser-capture video.");
@@ -331,7 +336,7 @@ function ProjectStudio() {
                     <DemoRow
                       key={demo.id}
                       demo={demo}
-                      videoUrl={renderedVideos[demo.id]}
+                      renderedVideo={renderedVideos[demo.id]}
                       isRendering={renderingDemoId === demo.id}
                       onRender={() => handleRenderDemo(demo)}
                     />
@@ -348,12 +353,12 @@ function ProjectStudio() {
 
 function DemoRow({
   demo,
-  videoUrl,
+  renderedVideo,
   isRendering,
   onRender,
 }: {
   demo: Demo;
-  videoUrl?: string;
+  renderedVideo?: RenderedVideo;
   isRendering: boolean;
   onRender: () => void;
 }) {
@@ -372,20 +377,23 @@ function DemoRow({
           <div className="mt-2 text-sm text-muted-foreground">{demo.current_step ?? "Queued"}</div>
         </div>
         <div className="flex flex-col gap-2">
-          {demo.thumbnail_url && (
-            <img
-              src={demo.thumbnail_url}
-              alt={`${demo.title} captured website frame`}
-              className="aspect-video w-full rounded-md border border-border object-cover"
-              loading="lazy"
+          {renderedVideo ? (
+            <video
+              src={renderedVideo.url}
+              controls
+              playsInline
+              preload="metadata"
+              className="aspect-video w-full rounded-md border border-border bg-background object-cover"
             />
+          ) : (
+            <div className="flex aspect-video w-full items-center justify-center rounded-md border border-border bg-background text-muted-foreground">
+              {isRendering ? <Loader2 className="animate-spin" /> : <Film className="h-7 w-7" />}
+            </div>
           )}
-          {videoUrl ? (
-            <Button asChild>
-              <a href={videoUrl} download={`${demo.title.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}-demoforge.webm`}>
-                <Download />
-                Download video
-              </a>
+          {renderedVideo ? (
+            <Button onClick={() => downloadVideo(renderedVideo, demo.title)}>
+              <Download />
+              Download video
             </Button>
           ) : (
             <Button variant="outline" onClick={onRender} disabled={isRendering}>
@@ -410,7 +418,11 @@ async function renderDemoVideo({ project, demo }: { project: Workspace["project"
   if (!ctx) throw new Error("Could not start the video renderer.");
 
   const stream = canvas.captureStream(30);
-  const mimeType = MediaRecorder.isTypeSupported("video/webm;codecs=vp9") ? "video/webm;codecs=vp9" : "video/webm";
+  const mimeType = MediaRecorder.isTypeSupported("video/webm;codecs=vp9")
+    ? "video/webm;codecs=vp9"
+    : MediaRecorder.isTypeSupported("video/webm;codecs=vp8")
+      ? "video/webm;codecs=vp8"
+      : "video/webm";
   const recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 4_000_000 });
   const chunks: Blob[] = [];
   recorder.ondataavailable = (event) => {
@@ -432,19 +444,44 @@ async function renderDemoVideo({ project, demo }: { project: Workspace["project"
     { text: "Ready to share", subtext: "Recorded from the real website URL", duration: 3200, motion: "up" as const },
   ];
 
-  const done = new Promise<string>((resolve) => {
+  const done = new Promise<RenderedVideo>((resolve, reject) => {
+    recorder.onerror = () => reject(new Error("The browser video recorder failed while encoding the demo."));
     recorder.onstop = () => {
       const blob = new Blob(chunks, { type: "video/webm" });
-      resolve(URL.createObjectURL(blob));
+      if (blob.size < 10_000) {
+        reject(new Error("The browser produced an empty video. Try rendering again."));
+        return;
+      }
+      resolve({ url: URL.createObjectURL(blob), blob, mimeType: "video/webm" });
     };
   });
 
-  recorder.start();
+  drawFrame(ctx, screenshot, pageModel, beats[0].text, beats[0].subtext, 0, beats[0].motion);
+  recorder.start(500);
   for (const beat of beats) {
     await animateBeat(ctx, screenshot, pageModel, beat.text, beat.subtext, beat.duration, beat.motion);
   }
-  recorder.stop();
+  if (recorder.state === "recording") {
+    recorder.requestData();
+    recorder.stop();
+  }
   return done;
+}
+
+function downloadVideo(video: RenderedVideo, title: string) {
+  const fileName = `${title.replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "").toLowerCase() || "demo"}-demoforge.webm`;
+  const anchor = document.createElement("a");
+  anchor.href = video.url;
+  anchor.download = fileName;
+  anchor.rel = "noopener";
+  anchor.style.display = "none";
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+
+  if (!("download" in HTMLAnchorElement.prototype)) {
+    window.open(video.url, "_blank", "noopener,noreferrer");
+  }
 }
 
 function loadImage(src: string) {
