@@ -417,12 +417,14 @@ async function renderDemoVideo({ project, demo }: { project: Workspace["project"
   };
 
   const screenshot = await loadImage(`/api/public/screenshot?url=${encodeURIComponent(project.base_url)}&width=1280`);
-  const script = Array.isArray(demo.scene_script) ? demo.scene_script : [];
+  const script: Array<{ shot?: unknown }> = Array.isArray(demo.scene_script)
+    ? demo.scene_script.filter((item): item is { shot?: unknown } => typeof item === "object" && item !== null)
+    : [];
   const beats = [
     { text: project.name, subtext: project.description ?? project.base_url, duration: 2600 },
     { text: demo.title, subtext: demo.feature_prompt, duration: 4200 },
     ...script.slice(0, 3).map((item) => ({
-      text: typeof item === "object" && item && "shot" in item ? String(item.shot) : "Real product moment",
+      text: item.shot ? String(item.shot) : "Real product moment",
       subtext: project.base_url,
       duration: 4200,
     })),

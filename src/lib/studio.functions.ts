@@ -64,7 +64,7 @@ export const getProjectWorkspace = createServerFn({ method: "GET" })
 
     const { data: demos, error: demosError } = await context.supabase
       .from("demos")
-      .select("id, title, feature_prompt, status, progress_pct, current_step, mp4_url, thumbnail_url, duration_seconds, created_at")
+      .select("id, title, feature_prompt, scene_script, status, progress_pct, current_step, mp4_url, thumbnail_url, duration_seconds, created_at")
       .eq("project_id", data.projectId)
       .order("created_at", { ascending: false });
 
@@ -309,7 +309,7 @@ export const createDemoJob = createServerFn({ method: "POST" })
         thumbnail_url: `/api/public/screenshot?url=${encodeURIComponent(project.base_url)}&width=1280`,
         duration_seconds: 24,
       })
-      .select("id, title, feature_prompt, status, progress_pct, current_step, mp4_url, thumbnail_url, duration_seconds, created_at")
+      .select("id, title, feature_prompt, scene_script, status, progress_pct, current_step, mp4_url, thumbnail_url, duration_seconds, created_at")
       .single();
 
     if (error) throw new Error(error.message);
