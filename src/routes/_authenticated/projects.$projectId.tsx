@@ -62,7 +62,7 @@ function ProjectStudio() {
       setWorkspace(next);
       setMapText(next.project.site_map_md ?? starterMap(next.project.name, next.project.base_url));
       setDescription(next.project.description ?? "");
-      setLoginUrl(next.credentials?.login_url ?? `${next.project.base_url}/login`);
+      setLoginUrl(next.credentials?.login_url ?? detectLoginUrlFromMap(next.project.site_map_md) ?? "");
       setUsername(next.credentials?.username_hint ?? "");
       if (!demoTitle) setDemoTitle(`${next.project.name} product demo`);
       if (!featurePrompt) setFeaturePrompt(defaultFeaturePrompt(next.project.name));
@@ -111,6 +111,7 @@ function ProjectStudio() {
       setWorkspace((current) => (current ? { ...current, project: scanned } : current));
       setMapText(scanned.site_map_md ?? "");
       setDescription(scanned.description ?? "");
+      if (!workspace?.credentials?.login_url) setLoginUrl(detectLoginUrlFromMap(scanned.site_map_md) ?? "");
       setNotice("Real site scanned and product map updated.");
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Could not scan this site.");
@@ -278,7 +279,7 @@ function ProjectStudio() {
                     </div>
                   </div>
                   <div className="mt-5 space-y-3">
-                    <Input value={loginUrl} onChange={(event) => setLoginUrl(event.target.value)} placeholder="Login URL" className="bg-background" />
+                    <Input value={loginUrl} onChange={(event) => setLoginUrl(event.target.value)} placeholder="Login URL, if the demo needs sign-in" className="bg-background" />
                     <Input value={username} onChange={(event) => setUsername(event.target.value)} placeholder="Email or username" className="bg-background" />
                     <Input value={secret} onChange={(event) => setSecret(event.target.value)} placeholder="Password or access code" type="password" className="bg-background" />
                     <Button onClick={handleSaveCredentials} disabled={busyAction === "creds"}>
@@ -416,17 +417,19 @@ async function renderDemoVideo({ project, demo }: { project: Workspace["project"
     if (event.data.size > 0) chunks.push(event.data);
   };
 
-  const screenshot = await loadImage(`/api/public/screenshot?url=${encodeURIComponent(project.base_url)}&width=1280`);
+  const screenshot = await loadImage(`/api/public/screenshot?url=${encodeURIComponent(project.base_url)}&width=1280`).catch(() => null);
+  const pageModel = buildPageModel(project.name, project.base_url, project.description, project.site_map_md);
   const scriptItems: unknown[] = Array.isArray(demo.scene_script) ? demo.scene_script : [];
   const beats = [
-    { text: project.name, subtext: project.description ?? project.base_url, duration: 2600 },
-    { text: demo.title, subtext: demo.feature_prompt, duration: 4200 },
+    { text: project.name, subtext: project.description ?? project.base_url, duration: 2800, motion: "intro" as const },
+    { text: demo.title, subtext: demo.feature_prompt, duration: 4200, motion: "down" as const },
     ...scriptItems.slice(0, 3).map((item) => ({
       text: getSceneShot(item),
       subtext: project.base_url,
-      duration: 4200,
+      duration: 4600,
+      motion: sceneMotion(getSceneShot(item)),
     })),
-    { text: "Ready to share", subtext: "Recorded from the real website URL", duration: 3000 },
+    { text: "Ready to share", subtext: "Recorded from the real website URL", duration: 3200, motion: "up" as const },
   ];
 
   const done = new Promise<string>((resolve) => {
@@ -438,7 +441,7 @@ async function renderDemoVideo({ project, demo }: { project: Workspace["project"
 
   recorder.start();
   for (const beat of beats) {
-    await animateBeat(ctx, screenshot, beat.text, beat.subtext, beat.duration);
+    await animateBeat(ctx, screenshot, pageModel, beat.text, beat.subtext, beat.duration, beat.motion);
   }
   recorder.stop();
   return done;
@@ -462,7 +465,26 @@ function getSceneShot(item: unknown) {
   return "Real product moment";
 }
 
-async function animateBeat(ctx: CanvasRenderingContext2D, image: HTMLImageElement, text: string, subtext: string, duration: number) {
+type PageModel = {
+  title: string;
+  baseUrl: string;
+  description: string;
+  headings: string[];
+  pages: string[];
+  actions: string[];
+};
+
+type DemoMotion = "intro" | "down" | "up";
+
+async function animateBeat(
+  ctx: CanvasRenderingContext2D,
+  image: HTMLImageElement | null,
+  pageModel: PageModel,
+  text: string,
+  subtext: string,
+  duration: number,
+  motion: DemoMotion,
+) {
   const start = performance.now();
   const end = start + duration;
 
@@ -470,33 +492,49 @@ async function animateBeat(ctx: CanvasRenderingContext2D, image: HTMLImageElemen
     const now = performance.now();
     const progress = Math.min(1, (now - start) / duration);
     const eased = easeInOut(progress);
-    drawFrame(ctx, image, text, subtext, eased);
+    drawFrame(ctx, image, pageModel, text, subtext, eased, motion);
     await new Promise((resolve) => requestAnimationFrame(resolve));
   }
 }
 
-function drawFrame(ctx: CanvasRenderingContext2D, image: HTMLImageElement, text: string, subtext: string, progress: number) {
+function drawFrame(
+  ctx: CanvasRenderingContext2D,
+  image: HTMLImageElement | null,
+  pageModel: PageModel,
+  text: string,
+  subtext: string,
+  progress: number,
+  motion: DemoMotion,
+) {
   const width = ctx.canvas.width;
   const height = ctx.canvas.height;
-  ctx.fillStyle = "#0a0a0a";
+  ctx.fillStyle = "#090706";
   ctx.fillRect(0, 0, width, height);
 
-  const zoom = 1.02 + progress * 0.08;
-  const imageWidth = width * zoom;
-  const imageHeight = height * zoom;
-  ctx.globalAlpha = 0.78;
-  ctx.drawImage(image, (width - imageWidth) / 2, (height - imageHeight) / 2, imageWidth, imageHeight);
+  drawBrowserChrome(ctx, 70, 52, width - 140, height - 118);
+  const viewport = { x: 94, y: 108, width: width - 188, height: height - 196 };
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(viewport.x, viewport.y, viewport.width, viewport.height);
+  ctx.clip();
+
+  const scroll = motion === "down" ? progress : motion === "up" ? 1 - progress : 0.12 + progress * 0.15;
+  if (image) {
+    drawCapturedPage(ctx, image, viewport, scroll);
+  }
+  drawScannedPage(ctx, pageModel, viewport, scroll, image ? 0.72 : 1);
+  ctx.restore();
   ctx.globalAlpha = 1;
 
   const gradient = ctx.createLinearGradient(0, 0, 0, height);
-  gradient.addColorStop(0, "rgba(10,10,10,0.18)");
-  gradient.addColorStop(0.58, "rgba(10,10,10,0.18)");
-  gradient.addColorStop(1, "rgba(10,10,10,0.92)");
+  gradient.addColorStop(0, "rgba(9,7,6,0.12)");
+  gradient.addColorStop(0.55, "rgba(9,7,6,0.08)");
+  gradient.addColorStop(1, "rgba(9,7,6,0.94)");
   ctx.fillStyle = gradient;
   ctx.fillRect(0, 0, width, height);
 
-  const cursorX = 220 + progress * 820;
-  const cursorY = 230 + Math.sin(progress * Math.PI) * 180;
+  const cursorX = viewport.x + 130 + progress * (viewport.width - 260);
+  const cursorY = viewport.y + 100 + Math.sin(progress * Math.PI) * (viewport.height - 210);
   ctx.fillStyle = "#ff5a1f";
   ctx.beginPath();
   ctx.arc(cursorX, cursorY, 18 + Math.sin(progress * Math.PI * 4) * 4, 0, Math.PI * 2);
@@ -513,6 +551,133 @@ function drawFrame(ctx: CanvasRenderingContext2D, image: HTMLImageElement, text:
   ctx.fillStyle = "rgba(245,245,245,0.72)";
   ctx.font = "500 24px Inter, Arial, sans-serif";
   wrapText(ctx, subtext, 72, 622, 900, 31, 2);
+}
+
+function drawBrowserChrome(ctx: CanvasRenderingContext2D, x: number, y: number, width: number, height: number) {
+  ctx.fillStyle = "rgba(245,245,245,0.94)";
+  roundRect(ctx, x, y, width, height, 22);
+  ctx.fill();
+  ctx.fillStyle = "rgba(16,14,12,0.92)";
+  roundRect(ctx, x + 18, y + 16, width - 36, 38, 14);
+  ctx.fill();
+  ["#ff5a1f", "#f2b84b", "#2ac769"].forEach((color, index) => {
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(x + 38 + index * 22, y + 35, 7, 0, Math.PI * 2);
+    ctx.fill();
+  });
+}
+
+function drawCapturedPage(
+  ctx: CanvasRenderingContext2D,
+  image: HTMLImageElement,
+  viewport: { x: number; y: number; width: number; height: number },
+  scroll: number,
+) {
+  ctx.globalAlpha = 1;
+  const coverScale = Math.max(viewport.width / image.naturalWidth, viewport.height / image.naturalHeight);
+  const drawWidth = image.naturalWidth * coverScale;
+  const drawHeight = image.naturalHeight * coverScale * 1.55;
+  const y = viewport.y - Math.max(0, drawHeight - viewport.height) * scroll;
+  ctx.drawImage(image, viewport.x - (drawWidth - viewport.width) / 2, y, drawWidth, drawHeight);
+}
+
+function drawScannedPage(
+  ctx: CanvasRenderingContext2D,
+  page: PageModel,
+  viewport: { x: number; y: number; width: number; height: number },
+  scroll: number,
+  alpha: number,
+) {
+  const pageHeight = viewport.height * 2.25;
+  const offsetY = -Math.max(0, pageHeight - viewport.height) * scroll;
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.fillStyle = "#f7f2ec";
+  ctx.fillRect(viewport.x, viewport.y + offsetY, viewport.width, pageHeight);
+
+  ctx.fillStyle = "#15110f";
+  ctx.font = "800 50px Inter, Arial, sans-serif";
+  wrapText(ctx, page.title, viewport.x + 56, viewport.y + offsetY + 106, viewport.width - 360, 58, 2);
+  ctx.fillStyle = "rgba(21,17,15,0.72)";
+  ctx.font = "500 24px Inter, Arial, sans-serif";
+  wrapText(ctx, page.description, viewport.x + 56, viewport.y + offsetY + 228, viewport.width - 420, 34, 3);
+  ctx.fillStyle = "#ff5a1f";
+  roundRect(ctx, viewport.x + 56, viewport.y + offsetY + 360, 190, 48, 10);
+  ctx.fill();
+  ctx.fillStyle = "#fffaf6";
+  ctx.font = "800 18px Inter, Arial, sans-serif";
+  ctx.fillText("Primary CTA", viewport.x + 90, viewport.y + offsetY + 391);
+
+  const sections = [
+    { title: "Pages discovered", items: page.pages },
+    { title: "Visible sections", items: page.headings },
+    { title: "Actions to film", items: page.actions },
+  ];
+  sections.forEach((section, sectionIndex) => {
+    const sectionY = viewport.y + offsetY + 510 + sectionIndex * 330;
+    ctx.fillStyle = "rgba(255,255,255,0.92)";
+    roundRect(ctx, viewport.x + 44, sectionY, viewport.width - 88, 250, 18);
+    ctx.fill();
+    ctx.fillStyle = "#ff5a1f";
+    ctx.font = "800 20px Inter, Arial, sans-serif";
+    ctx.fillText(section.title, viewport.x + 82, sectionY + 48);
+    ctx.fillStyle = "#211b17";
+    ctx.font = "600 22px Inter, Arial, sans-serif";
+    section.items.slice(0, 4).forEach((item, itemIndex) => {
+      ctx.fillText(`• ${item}`, viewport.x + 82, sectionY + 92 + itemIndex * 38);
+    });
+  });
+  ctx.restore();
+}
+
+function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, width: number, height: number, radius: number) {
+  const safeRadius = Math.min(radius, width / 2, height / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + safeRadius, y);
+  ctx.lineTo(x + width - safeRadius, y);
+  ctx.quadraticCurveTo(x + width, y, x + width, y + safeRadius);
+  ctx.lineTo(x + width, y + height - safeRadius);
+  ctx.quadraticCurveTo(x + width, y + height, x + width - safeRadius, y + height);
+  ctx.lineTo(x + safeRadius, y + height);
+  ctx.quadraticCurveTo(x, y + height, x, y + height - safeRadius);
+  ctx.lineTo(x, y + safeRadius);
+  ctx.quadraticCurveTo(x, y, x + safeRadius, y);
+  ctx.closePath();
+}
+
+function buildPageModel(title: string, baseUrl: string, description: string | null, siteMapMd: string | null): PageModel {
+  const map = siteMapMd ?? "";
+  return {
+    title,
+    baseUrl,
+    description: description ?? `Public product experience captured from ${baseUrl}.`,
+    headings: extractBulletsAfter(map, "Important visible sections", ["Hero section", "Product value", "Social proof", "Call to action"]),
+    pages: extractBulletsAfter(map, "Real pages discovered", [baseUrl]),
+    actions: extractBulletsAfter(map, "Clicks and calls to action to film", ["Scroll landing page", "Show primary CTA", "End on value proof"]),
+  };
+}
+
+function extractBulletsAfter(markdown: string, heading: string, fallback: string[]) {
+  const marker = `## ${heading}`;
+  const start = markdown.indexOf(marker);
+  if (start === -1) return fallback;
+  const rest = markdown.slice(start + marker.length).split("\n## ")[0] ?? "";
+  const items = rest
+    .split("\n")
+    .map((line) => line.replace(/^[-*]\s*/, "").trim())
+    .filter((line) => line.length > 0 && !line.startsWith("#"))
+    .map((line) => line.replace(/^https?:\/\//, "").slice(0, 72));
+  return items.length > 0 ? items : fallback;
+}
+
+function detectLoginUrlFromMap(siteMapMd: string | null) {
+  const match = siteMapMd?.match(/Detected login page:\s*(https?:\/\/\S+)/i);
+  return match?.[1]?.replace(/[).,]+$/, "") ?? null;
+}
+
+function sceneMotion(text: string): DemoMotion {
+  return /back up|scroll back|close/i.test(text) ? "up" : "down";
 }
 
 function wrapText(ctx: CanvasRenderingContext2D, text: string, x: number, y: number, maxWidth: number, lineHeight: number, maxLines: number) {

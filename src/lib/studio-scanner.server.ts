@@ -8,6 +8,7 @@ export type WebsiteScan = {
   description: string;
   siteMapMd: string;
   links: ScanLink[];
+  authUrl: string | null;
 };
 
 export function normalizePublicUrl(input: string): string {
@@ -53,12 +54,14 @@ export async function scanWebsite(url: string, projectName: string): Promise<Web
     const headings = collectHeadings(html);
     const actions = collectActions(html);
     const links = collectLinks(html, normalizedUrl);
+    const authUrl = await detectAuthUrl(html, links, normalizedUrl, controller.signal);
 
     return {
       title: cleanText(title).slice(0, 120),
       description: cleanText(description).slice(0, 700),
       links,
-      siteMapMd: buildSiteMap({ projectName, normalizedUrl, title, description, headings, actions, links }),
+      authUrl,
+      siteMapMd: buildSiteMap({ projectName, normalizedUrl, title, description, headings, actions, links, authUrl }),
     };
   } catch {
     return buildFallbackScan(normalizedUrl, projectName);
@@ -72,6 +75,7 @@ function buildFallbackScan(url: string, projectName: string): WebsiteScan {
     title: projectName,
     description: `${projectName} product experience captured from ${url}.`,
     links: [{ label: "Start page", url }],
+    authUrl: null,
     siteMapMd: buildSiteMap({
       projectName,
       normalizedUrl: url,
@@ -80,6 +84,7 @@ function buildFallbackScan(url: string, projectName: string): WebsiteScan {
       headings: [],
       actions: ["Open product", "Review main call to action", "Show result"],
       links: [{ label: "Start page", url }],
+      authUrl: null,
     }),
   };
 }
@@ -92,6 +97,7 @@ function buildSiteMap(input: {
   headings: string[];
   actions: string[];
   links: ScanLink[];
+  authUrl: string | null;
 }) {
   const pageLines = (input.links.length > 0 ? input.links : [{ label: "Start page", url: input.normalizedUrl }])
     .slice(0, 12)
@@ -117,11 +123,16 @@ ${headingLines}
 ## Clicks and calls to action to film
 ${actionLines}
 
+## Authentication
+${input.authUrl ? `- Detected login page: ${input.authUrl}` : "- No dedicated login page detected from the public scan. Record the landing page unless the user adds credentials."}
+
 ## Demo direction
 1. Open the real site and establish what the product is.
-2. Move through the clearest page or call to action discovered above.
-3. Highlight the result, export, dashboard, or proof screen.
-4. Keep the final video under 69 seconds and avoid invented product states.
+2. If credentials are saved and a login page is detected, sign in through the detected login page.
+3. If no credentials are saved, record the public landing page with scroll down and scroll back up.
+4. Move through the clearest page or call to action discovered above.
+5. Highlight the result, export, dashboard, or proof screen.
+6. Keep the final video under 69 seconds and avoid invented product states.
 `;
 }
 
@@ -197,6 +208,54 @@ function collectLinks(html: string, base: string): ScanLink[] {
 
   if (!links.some((link) => link.url === base)) links.unshift({ label: "Start page", url: base });
   return links.slice(0, 14);
+}
+
+async function detectAuthUrl(html: string, links: ScanLink[], base: string, signal: AbortSignal) {
+  const found = links.find((link) => isAuthCandidate(`${link.label} ${link.url}`));
+  if (found) return found.url;
+
+  const inlineHref = Array.from(html.matchAll(/href=["']([^"']+)["']/gi))
+    .map((match) => match[1])
+    .find((href) => isAuthCandidate(href));
+  if (inlineHref) {
+    try {
+      return new URL(decodeEntities(inlineHref), base).toString().replace(/\/$/, "");
+    } catch {
+      // Ignore malformed auth links.
+    }
+  }
+
+  const baseUrl = new URL(base);
+  const commonPaths = ["/auth", "/login", "/signin", "/sign-in", "/log-in", "/users/sign_in", "/account/login"];
+  const scored: { url: string; score: number }[] = [];
+
+  for (const path of commonPaths) {
+    try {
+      const url = new URL(path, baseUrl).toString().replace(/\/$/, "");
+      const response = await fetch(url, {
+        method: "GET",
+        signal,
+        headers: { accept: "text/html,application/xhtml+xml", "user-agent": "DemoForgeBot/1.0 (+https://lovable.dev)" },
+      });
+      if (!response.ok) continue;
+      const body = (await response.text()).slice(0, 80_000);
+      const text = stripHtml(body).toLowerCase();
+      const title = getTagText(body, "title").toLowerCase();
+      let score = commonPaths.length - commonPaths.indexOf(path);
+      if (/sign\s*in|log\s*in|continue with|password|email/.test(`${title} ${text}`)) score += 40;
+      if (path === "/auth") score += 8;
+      if (/not found|404/.test(`${title} ${text}`)) score -= 50;
+      scored.push({ url, score });
+    } catch {
+      // Continue probing other common auth routes.
+    }
+  }
+
+  return scored.sort((a, b) => b.score - a.score)[0]?.url ?? null;
+}
+
+function isAuthCandidate(value: string) {
+  return /(^|[\s/._-])(auth|login|log-in|signin|sign-in|sign_in|account)([\s/._-]|$)/i.test(value);
 }
 
 function sentenceFromText(text: string) {
