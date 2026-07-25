@@ -1,0 +1,234 @@
+type ScanLink = {
+  label: string;
+  url: string;
+};
+
+export type WebsiteScan = {
+  title: string;
+  description: string;
+  siteMapMd: string;
+  links: ScanLink[];
+};
+
+export function normalizePublicUrl(input: string): string {
+  const candidate = /^https?:\/\//i.test(input.trim()) ? input.trim() : `https://${input.trim()}`;
+  const url = new URL(candidate);
+
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error("Enter a public http or https website URL.");
+  }
+
+  url.hash = "";
+  if (url.pathname === "/") url.pathname = "";
+  return url.toString().replace(/\/$/, "");
+}
+
+export async function scanWebsite(url: string, projectName: string): Promise<WebsiteScan> {
+  const normalizedUrl = normalizePublicUrl(url);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
+
+  try {
+    const response = await fetch(normalizedUrl, {
+      signal: controller.signal,
+      headers: {
+        accept: "text/html,application/xhtml+xml",
+        "user-agent": "DemoForgeBot/1.0 (+https://lovable.dev)",
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error(`The site returned ${response.status}.`);
+    }
+
+    const rawHtml = await response.text();
+    const html = rawHtml.slice(0, 700_000);
+    const textOnly = stripHtml(html);
+    const title = getTagText(html, "title") || getHeading(html, 1) || projectName;
+    const description =
+      getMetaContent(html, "description") ||
+      getMetaContent(html, "og:description") ||
+      sentenceFromText(textOnly) ||
+      `${projectName} product experience.`;
+    const headings = collectHeadings(html);
+    const actions = collectActions(html);
+    const links = collectLinks(html, normalizedUrl);
+
+    return {
+      title: cleanText(title).slice(0, 120),
+      description: cleanText(description).slice(0, 700),
+      links,
+      siteMapMd: buildSiteMap({ projectName, normalizedUrl, title, description, headings, actions, links }),
+    };
+  } catch {
+    return buildFallbackScan(normalizedUrl, projectName);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function buildFallbackScan(url: string, projectName: string): WebsiteScan {
+  return {
+    title: projectName,
+    description: `${projectName} product experience captured from ${url}.`,
+    links: [{ label: "Start page", url }],
+    siteMapMd: buildSiteMap({
+      projectName,
+      normalizedUrl: url,
+      title: projectName,
+      description: `${projectName} product experience captured from ${url}.`,
+      headings: [],
+      actions: ["Open product", "Review main call to action", "Show result"],
+      links: [{ label: "Start page", url }],
+    }),
+  };
+}
+
+function buildSiteMap(input: {
+  projectName: string;
+  normalizedUrl: string;
+  title: string;
+  description: string;
+  headings: string[];
+  actions: string[];
+  links: ScanLink[];
+}) {
+  const pageLines = (input.links.length > 0 ? input.links : [{ label: "Start page", url: input.normalizedUrl }])
+    .slice(0, 12)
+    .map((link) => `- ${link.label}: ${link.url}`)
+    .join("\n");
+  const headingLines = input.headings.slice(0, 10).map((heading) => `- ${heading}`).join("\n") || "- Main product screen";
+  const actionLines = input.actions.slice(0, 10).map((action) => `- ${action}`).join("\n") || "- Open the product\n- Show the primary call to action\n- End on the most visual proof screen";
+
+  return `# ${input.projectName} product map
+
+Base URL: ${input.normalizedUrl}
+Detected title: ${cleanText(input.title)}
+
+## Product description
+${cleanText(input.description)}
+
+## Real pages discovered
+${pageLines}
+
+## Important visible sections
+${headingLines}
+
+## Clicks and calls to action to film
+${actionLines}
+
+## Demo direction
+1. Open the real site and establish what the product is.
+2. Move through the clearest page or call to action discovered above.
+3. Highlight the result, export, dashboard, or proof screen.
+4. Keep the final video under 69 seconds and avoid invented product states.
+`;
+}
+
+function stripHtml(html: string) {
+  return cleanText(
+    html
+      .replace(/<script[\s\S]*?<\/script>/gi, " ")
+      .replace(/<style[\s\S]*?<\/style>/gi, " ")
+      .replace(/<[^>]+>/g, " "),
+  );
+}
+
+function getTagText(html: string, tag: string) {
+  const match = html.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\/${tag}>`, "i"));
+  return match ? decodeEntities(match[1]) : "";
+}
+
+function getHeading(html: string, level: number) {
+  return getTagText(html, `h${level}`);
+}
+
+function getMetaContent(html: string, name: string) {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const patterns = [
+    new RegExp(`<meta[^>]+name=["']${escaped}["'][^>]+content=["']([^"']*)["'][^>]*>`, "i"),
+    new RegExp(`<meta[^>]+property=["']${escaped}["'][^>]+content=["']([^"']*)["'][^>]*>`, "i"),
+    new RegExp(`<meta[^>]+content=["']([^"']*)["'][^>]+name=["']${escaped}["'][^>]*>`, "i"),
+    new RegExp(`<meta[^>]+content=["']([^"']*)["'][^>]+property=["']${escaped}["'][^>]*>`, "i"),
+  ];
+
+  for (const pattern of patterns) {
+    const match = html.match(pattern);
+    if (match) return decodeEntities(match[1]);
+  }
+  return "";
+}
+
+function collectHeadings(html: string) {
+  const headings = Array.from(html.matchAll(/<h[1-3][^>]*>([\s\S]*?)<\/h[1-3]>/gi))
+    .map((match) => cleanText(decodeEntities(match[1].replace(/<[^>]+>/g, " "))))
+    .filter(Boolean);
+  return unique(headings).slice(0, 12);
+}
+
+function collectActions(html: string) {
+  const actions = Array.from(html.matchAll(/<(?:a|button)[^>]*>([\s\S]*?)<\/(?:a|button)>/gi))
+    .map((match) => cleanText(decodeEntities(match[1].replace(/<[^>]+>/g, " "))))
+    .filter((text) => text.length > 1 && text.length < 70)
+    .filter((text) => /start|try|demo|sign|login|create|book|join|launch|get|export|dashboard|pricing|learn|contact/i.test(text));
+  return unique(actions).slice(0, 12);
+}
+
+function collectLinks(html: string, base: string): ScanLink[] {
+  const baseUrl = new URL(base);
+  const links: ScanLink[] = [];
+
+  for (const match of html.matchAll(/<a\s+[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi)) {
+    const href = decodeEntities(match[1]);
+    if (!href || href.startsWith("#") || /^(mailto|tel|javascript):/i.test(href)) continue;
+
+    try {
+      const url = new URL(href, baseUrl);
+      if (url.origin !== baseUrl.origin) continue;
+      url.hash = "";
+      const label = cleanText(decodeEntities(match[2].replace(/<[^>]+>/g, " "))) || labelFromPath(url.pathname);
+      const normalized = url.toString().replace(/\/$/, "");
+      if (!links.some((link) => link.url === normalized)) links.push({ label: label.slice(0, 80), url: normalized });
+      if (links.length >= 14) break;
+    } catch {
+      // Ignore malformed links from the target page.
+    }
+  }
+
+  if (!links.some((link) => link.url === base)) links.unshift({ label: "Start page", url: base });
+  return links.slice(0, 14);
+}
+
+function sentenceFromText(text: string) {
+  const sentence = text.split(/(?<=[.!?])\s+/).find((item) => item.length > 50 && item.length < 240);
+  return sentence ?? text.slice(0, 180);
+}
+
+function labelFromPath(pathname: string) {
+  const segment = pathname.split("/").filter(Boolean).at(-1) ?? "Start page";
+  return segment.replace(/[-_]/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function unique(items: string[]) {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    const key = item.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function cleanText(value: string) {
+  return decodeEntities(value).replace(/\s+/g, " ").trim();
+}
+
+function decodeEntities(value: string) {
+  return value
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&nbsp;/g, " ");
+}
