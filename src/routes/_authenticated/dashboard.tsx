@@ -14,6 +14,8 @@ export const Route = createFileRoute("/_authenticated/dashboard")({
       { name: "description", content: "Your DemoForge projects, demos, and render queue." },
       { property: "og:title", content: "Dashboard — DemoForge" },
       { property: "og:description", content: "Your DemoForge projects, demos, and render queue." },
+      { property: "og:type", content: "website" },
+      { name: "twitter:card", content: "summary_large_image" },
     ],
   }),
   component: Dashboard,

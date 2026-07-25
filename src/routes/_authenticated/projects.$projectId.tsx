@@ -1,4 +1,4 @@
-import { Link } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { ArrowLeft, ExternalLink, Film, KeyRound, Loader2, Map, Play, Save, Sparkles } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -12,7 +12,6 @@ import {
   saveProjectCredential,
   saveProjectMap,
 } from "@/lib/studio.functions";
-import { createFileRoute } from "@tanstack/react-router";
 
 export const Route = createFileRoute("/_authenticated/projects/$projectId")({
   head: () => ({
@@ -21,6 +20,8 @@ export const Route = createFileRoute("/_authenticated/projects/$projectId")({
       { name: "description", content: "Map a SaaS product, add secure access, and queue real browser demo recordings in DemoForge." },
       { property: "og:title", content: "Project Studio — DemoForge" },
       { property: "og:description", content: "Map a SaaS product, add secure access, and queue real browser demo recordings in DemoForge." },
+      { property: "og:type", content: "website" },
+      { name: "twitter:card", content: "summary_large_image" },
     ],
   }),
   component: ProjectStudio,
