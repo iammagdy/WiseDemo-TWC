@@ -80,6 +80,7 @@ function buildFallbackScan(url: string, projectName: string): WebsiteScan {
       description: `${projectName} product experience captured from ${url}.`,
       headings: [],
       actions: ["Open product", "Review main call to action", "Show result"],
+      features: ["Main product experience", "Primary call to action", "Final value screen"],
       links: [{ label: "Start page", url }],
       authUrl: null,
     }),
@@ -93,6 +94,7 @@ function buildSiteMap(input: {
   description: string;
   headings: string[];
   actions: string[];
+  features: string[];
   links: ScanLink[];
   authUrl: string | null;
 }) {
@@ -101,6 +103,7 @@ function buildSiteMap(input: {
     .map((link) => `- ${link.label}: ${link.url}`)
     .join("\n");
   const headingLines = input.headings.slice(0, 10).map((heading) => `- ${heading}`).join("\n") || "- Main product screen";
+  const featureLines = input.features.slice(0, 12).map((feature) => `- ${feature}`).join("\n") || "- Main product experience";
   const actionLines = input.actions.slice(0, 10).map((action) => `- ${action}`).join("\n") || "- Open the product\n- Show the primary call to action\n- End on the most visual proof screen";
 
   return `# ${input.projectName} product map
@@ -117,6 +120,9 @@ ${pageLines}
 ## Important visible sections
 ${headingLines}
 
+## Features and product signals
+${featureLines}
+
 ## Clicks and calls to action to film
 ${actionLines}
 
@@ -131,6 +137,92 @@ ${input.authUrl ? `- Detected login page: ${input.authUrl}` : "- No dedicated lo
 5. Highlight the result, export, dashboard, or proof screen.
 6. Keep the final video under 69 seconds and avoid invented product states.
 `;
+}
+
+async function fetchHtml(url: string, timeoutMs: number) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(url, {
+      signal: controller.signal,
+      redirect: "follow",
+      headers: {
+        accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "user-agent": "Mozilla/5.0 (compatible; DemoForgeBot/1.0; +https://lovable.dev)",
+      },
+    });
+
+    if (!response.ok) throw new Error(`The site returned ${response.status}.`);
+    const contentType = response.headers.get("content-type") ?? "";
+    if (contentType && !/html|xml|text/i.test(contentType)) throw new Error("The URL did not return readable page content.");
+    return (await response.text()).slice(0, 700_000);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function discoverSitemapLinks(base: string): Promise<ScanLink[]> {
+  const baseUrl = new URL(base);
+  const sitemapUrls = [new URL("/sitemap.xml", baseUrl).toString(), new URL("/sitemap_index.xml", baseUrl).toString()];
+  const links: ScanLink[] = [];
+
+  for (const sitemapUrl of sitemapUrls) {
+    try {
+      const xml = await fetchHtml(sitemapUrl, 4500);
+      for (const match of xml.matchAll(/<loc>\s*([^<]+)\s*<\/loc>/gi)) {
+        const loc = decodeEntities(match[1]);
+        const url = new URL(loc, baseUrl);
+        if (url.origin !== baseUrl.origin) continue;
+        url.hash = "";
+        const normalized = url.toString().replace(/\/$/, "");
+        links.push({ label: labelFromPath(url.pathname), url: normalized });
+        if (links.length >= 28) break;
+      }
+    } catch {
+      // Many apps do not expose a sitemap; home-page links still work.
+    }
+  }
+
+  return mergeScanLinks(links);
+}
+
+function prioritizeLinks(links: ScanLink[], base: string): ScanLink[] {
+  const baseUrl = new URL(base);
+  return mergeScanLinks(links)
+    .filter((link) => {
+      try {
+        const url = new URL(link.url);
+        return url.origin === baseUrl.origin && !/\.(png|jpe?g|gif|webp|svg|pdf|zip|mp4|webm)$/i.test(url.pathname);
+      } catch {
+        return false;
+      }
+    })
+    .sort((a, b) => linkScore(b) - linkScore(a));
+}
+
+function linkScore(link: ScanLink) {
+  const value = `${link.label} ${link.url}`.toLowerCase();
+  let score = 0;
+  if (/feature|product|solution|use-case|workflow|dashboard|app|demo|pricing|customer|case|integrations/.test(value)) score += 30;
+  if (/auth|login|signin|sign-in|account/.test(value)) score += 18;
+  if (/blog|privacy|terms|legal|cookie|status|docs\/api|changelog/.test(value)) score -= 30;
+  score -= Math.min(12, new URL(link.url).pathname.split("/").filter(Boolean).length * 2);
+  return score;
+}
+
+function mergeScanLinks(links: ScanLink[]) {
+  const seen = new Set<string>();
+  const merged: ScanLink[] = [];
+
+  for (const link of links) {
+    const normalized = link.url.replace(/\/$/, "");
+    if (seen.has(normalized)) continue;
+    seen.add(normalized);
+    merged.push({ label: cleanText(link.label || labelFromPath(new URL(normalized).pathname)).slice(0, 80), url: normalized });
+  }
+
+  return merged;
 }
 
 function stripHtml(html: string) {
