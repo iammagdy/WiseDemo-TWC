@@ -1,6 +1,6 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
-import { ArrowLeft, ExternalLink, Film, KeyRound, Loader2, Map, Play, Save, Sparkles } from "lucide-react";
+import { ArrowLeft, Download, ExternalLink, Film, KeyRound, Loader2, Map, Play, RefreshCw, Save, Sparkles, Wand2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -9,6 +9,7 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   createDemoJob,
   getProjectWorkspace,
+  scanProjectSite,
   saveProjectCredential,
   saveProjectMap,
 } from "@/lib/studio.functions";
@@ -36,6 +37,7 @@ function ProjectStudio() {
   const saveMap = useServerFn(saveProjectMap);
   const saveCredential = useServerFn(saveProjectCredential);
   const createDemo = useServerFn(createDemoJob);
+  const scanSite = useServerFn(scanProjectSite);
 
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
   const [loading, setLoading] = useState(true);
@@ -47,7 +49,9 @@ function ProjectStudio() {
   const [secret, setSecret] = useState("");
   const [demoTitle, setDemoTitle] = useState("");
   const [featurePrompt, setFeaturePrompt] = useState("");
-  const [busyAction, setBusyAction] = useState<"map" | "creds" | "demo" | null>(null);
+  const [busyAction, setBusyAction] = useState<"map" | "creds" | "demo" | "scan" | null>(null);
+  const [renderingDemoId, setRenderingDemoId] = useState<string | null>(null);
+  const [renderedVideos, setRenderedVideos] = useState<Record<string, string>>({});
   const [notice, setNotice] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -61,12 +65,13 @@ function ProjectStudio() {
       setLoginUrl(next.credentials?.login_url ?? `${next.project.base_url}/login`);
       setUsername(next.credentials?.username_hint ?? "");
       if (!demoTitle) setDemoTitle(`${next.project.name} product demo`);
+      if (!featurePrompt) setFeaturePrompt(defaultFeaturePrompt(next.project.name));
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Could not load this project.");
     } finally {
       setLoading(false);
     }
-  }, [demoTitle, fetchWorkspace, projectId]);
+  }, [demoTitle, featurePrompt, fetchWorkspace, projectId]);
 
   useEffect(() => {
     void load();
@@ -92,6 +97,23 @@ function ProjectStudio() {
       setNotice("Product map saved.");
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Could not save the product map.");
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function handleScanSite() {
+    setBusyAction("scan");
+    setNotice(null);
+    setError(null);
+    try {
+      const scanned = await scanSite({ data: { projectId } });
+      setWorkspace((current) => (current ? { ...current, project: scanned } : current));
+      setMapText(scanned.site_map_md ?? "");
+      setDescription(scanned.description ?? "");
+      setNotice("Real site scanned and product map updated.");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Could not scan this site.");
     } finally {
       setBusyAction(null);
     }
@@ -124,12 +146,28 @@ function ProjectStudio() {
     try {
       const demo = await createDemo({ data: { projectId, title: demoTitle, featurePrompt } });
       setWorkspace((current) => (current ? { ...current, demos: [demo, ...current.demos] } : current));
-      setFeaturePrompt("");
-      setNotice("Demo queued.");
+      setNotice("Demo script created. Rendering real browser-capture video…");
+      await handleRenderDemo(demo);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Could not queue the demo.");
     } finally {
       setBusyAction(null);
+    }
+  }
+
+  async function handleRenderDemo(demo: Demo) {
+    if (!workspace?.project) return;
+    setRenderingDemoId(demo.id);
+    setNotice(null);
+    setError(null);
+    try {
+      const videoUrl = await renderDemoVideo({ project: workspace.project, demo });
+      setRenderedVideos((current) => ({ ...current, [demo.id]: videoUrl }));
+      setNotice("Real demo video rendered. Download it from the demo queue.");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Could not render the browser-capture video.");
+    } finally {
+      setRenderingDemoId(null);
     }
   }
 
@@ -215,6 +253,10 @@ function ProjectStudio() {
                     {busyAction === "map" ? <Loader2 className="animate-spin" /> : <Save />}
                     Save map
                   </Button>
+                  <Button variant="outline" onClick={handleScanSite} disabled={busyAction === "scan"}>
+                    {busyAction === "scan" ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+                    Scan real site
+                  </Button>
                   <Button variant="outline" onClick={() => setMapText(starterMap(project.name, project.base_url))}>
                     <Sparkles />
                     Starter map
@@ -266,7 +308,7 @@ function ProjectStudio() {
                     />
                     <Button onClick={handleCreateDemo} disabled={busyAction === "demo"}>
                       {busyAction === "demo" ? <Loader2 className="animate-spin" /> : <Play />}
-                      Queue demo
+                      Create + render demo
                     </Button>
                   </div>
                 </div>
@@ -285,7 +327,13 @@ function ProjectStudio() {
               ) : (
                 <div className="grid gap-3">
                   {workspace.demos.map((demo) => (
-                    <DemoRow key={demo.id} demo={demo} />
+                    <DemoRow
+                      key={demo.id}
+                      demo={demo}
+                      videoUrl={renderedVideos[demo.id]}
+                      isRendering={renderingDemoId === demo.id}
+                      onRender={() => handleRenderDemo(demo)}
+                    />
                   ))}
                 </div>
               )}
@@ -297,11 +345,21 @@ function ProjectStudio() {
   );
 }
 
-function DemoRow({ demo }: { demo: Demo }) {
+function DemoRow({
+  demo,
+  videoUrl,
+  isRendering,
+  onRender,
+}: {
+  demo: Demo;
+  videoUrl?: string;
+  isRendering: boolean;
+  onRender: () => void;
+}) {
   return (
     <article className="rounded-lg border border-border bg-card p-4">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
+      <div className="grid gap-4 lg:grid-cols-[1fr_280px] lg:items-center">
+        <div className="min-w-0">
           <div className="flex items-center gap-2">
             <span className="rounded-sm border border-border px-2 py-0.5 font-mono-tight text-xs uppercase text-muted-foreground">
               {demo.status}
@@ -310,11 +368,171 @@ function DemoRow({ demo }: { demo: Demo }) {
           </div>
           <h3 className="mt-2 font-semibold">{demo.title}</h3>
           <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">{demo.feature_prompt}</p>
+          <div className="mt-2 text-sm text-muted-foreground">{demo.current_step ?? "Queued"}</div>
         </div>
-        <div className="text-sm text-muted-foreground">{demo.current_step ?? "Queued"}</div>
+        <div className="flex flex-col gap-2">
+          {demo.thumbnail_url && (
+            <img
+              src={demo.thumbnail_url}
+              alt={`${demo.title} captured website frame`}
+              className="aspect-video w-full rounded-md border border-border object-cover"
+              loading="lazy"
+            />
+          )}
+          {videoUrl ? (
+            <Button asChild>
+              <a href={videoUrl} download={`${demo.title.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}-demoforge.webm`}>
+                <Download />
+                Download video
+              </a>
+            </Button>
+          ) : (
+            <Button variant="outline" onClick={onRender} disabled={isRendering}>
+              {isRendering ? <Loader2 className="animate-spin" /> : <Wand2 />}
+              {isRendering ? "Rendering…" : "Render video"}
+            </Button>
+          )}
+        </div>
       </div>
     </article>
   );
+}
+
+async function renderDemoVideo({ project, demo }: { project: Workspace["project"]; demo: Demo }) {
+  if (typeof window === "undefined") throw new Error("Video rendering only runs in the browser.");
+  if (typeof MediaRecorder === "undefined") throw new Error("Your browser does not support video rendering here.");
+
+  const canvas = document.createElement("canvas");
+  canvas.width = 1280;
+  canvas.height = 720;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("Could not start the video renderer.");
+
+  const stream = canvas.captureStream(30);
+  const mimeType = MediaRecorder.isTypeSupported("video/webm;codecs=vp9") ? "video/webm;codecs=vp9" : "video/webm";
+  const recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 4_000_000 });
+  const chunks: Blob[] = [];
+  recorder.ondataavailable = (event) => {
+    if (event.data.size > 0) chunks.push(event.data);
+  };
+
+  const screenshot = await loadImage(`/api/public/screenshot?url=${encodeURIComponent(project.base_url)}&width=1280`);
+  const script = Array.isArray(demo.scene_script) ? demo.scene_script : [];
+  const beats = [
+    { text: project.name, subtext: project.description ?? project.base_url, duration: 2600 },
+    { text: demo.title, subtext: demo.feature_prompt, duration: 4200 },
+    ...script.slice(0, 3).map((item) => ({
+      text: typeof item === "object" && item && "shot" in item ? String(item.shot) : "Real product moment",
+      subtext: project.base_url,
+      duration: 4200,
+    })),
+    { text: "Ready to share", subtext: "Recorded from the real website URL", duration: 3000 },
+  ];
+
+  const done = new Promise<string>((resolve) => {
+    recorder.onstop = () => {
+      const blob = new Blob(chunks, { type: "video/webm" });
+      resolve(URL.createObjectURL(blob));
+    };
+  });
+
+  recorder.start();
+  for (const beat of beats) {
+    await animateBeat(ctx, screenshot, beat.text, beat.subtext, beat.duration);
+  }
+  recorder.stop();
+  return done;
+}
+
+function loadImage(src: string) {
+  return new Promise<HTMLImageElement>((resolve, reject) => {
+    const image = new Image();
+    image.crossOrigin = "anonymous";
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error("Could not load the real website capture."));
+    image.src = src;
+  });
+}
+
+async function animateBeat(ctx: CanvasRenderingContext2D, image: HTMLImageElement, text: string, subtext: string, duration: number) {
+  const start = performance.now();
+  const end = start + duration;
+
+  while (performance.now() < end) {
+    const now = performance.now();
+    const progress = Math.min(1, (now - start) / duration);
+    const eased = easeInOut(progress);
+    drawFrame(ctx, image, text, subtext, eased);
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+  }
+}
+
+function drawFrame(ctx: CanvasRenderingContext2D, image: HTMLImageElement, text: string, subtext: string, progress: number) {
+  const width = ctx.canvas.width;
+  const height = ctx.canvas.height;
+  ctx.fillStyle = "#0a0a0a";
+  ctx.fillRect(0, 0, width, height);
+
+  const zoom = 1.02 + progress * 0.08;
+  const imageWidth = width * zoom;
+  const imageHeight = height * zoom;
+  ctx.globalAlpha = 0.78;
+  ctx.drawImage(image, (width - imageWidth) / 2, (height - imageHeight) / 2, imageWidth, imageHeight);
+  ctx.globalAlpha = 1;
+
+  const gradient = ctx.createLinearGradient(0, 0, 0, height);
+  gradient.addColorStop(0, "rgba(10,10,10,0.18)");
+  gradient.addColorStop(0.58, "rgba(10,10,10,0.18)");
+  gradient.addColorStop(1, "rgba(10,10,10,0.92)");
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, width, height);
+
+  const cursorX = 220 + progress * 820;
+  const cursorY = 230 + Math.sin(progress * Math.PI) * 180;
+  ctx.fillStyle = "#ff5a1f";
+  ctx.beginPath();
+  ctx.arc(cursorX, cursorY, 18 + Math.sin(progress * Math.PI * 4) * 4, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = "rgba(255,255,255,0.9)";
+  ctx.lineWidth = 5;
+  ctx.stroke();
+
+  ctx.fillStyle = "#ff5a1f";
+  ctx.fillRect(72, 70, 86, 6);
+  ctx.fillStyle = "#f5f5f5";
+  ctx.font = "700 44px Inter, Arial, sans-serif";
+  wrapText(ctx, text, 72, 560, 860, 50, 2);
+  ctx.fillStyle = "rgba(245,245,245,0.72)";
+  ctx.font = "500 24px Inter, Arial, sans-serif";
+  wrapText(ctx, subtext, 72, 622, 900, 31, 2);
+}
+
+function wrapText(ctx: CanvasRenderingContext2D, text: string, x: number, y: number, maxWidth: number, lineHeight: number, maxLines: number) {
+  const words = text.split(/\s+/).filter(Boolean);
+  let line = "";
+  let lines = 0;
+
+  for (const word of words) {
+    const testLine = line ? `${line} ${word}` : word;
+    if (ctx.measureText(testLine).width > maxWidth && line) {
+      ctx.fillText(line, x, y + lines * lineHeight);
+      line = word;
+      lines += 1;
+      if (lines >= maxLines) return;
+    } else {
+      line = testLine;
+    }
+  }
+
+  if (line && lines < maxLines) ctx.fillText(line, x, y + lines * lineHeight);
+}
+
+function easeInOut(value: number) {
+  return value < 0.5 ? 2 * value * value : 1 - Math.pow(-2 * value + 2, 2) / 2;
+}
+
+function defaultFeaturePrompt(name: string) {
+  return `Show the main ${name} product experience from the homepage, including the clearest call to action and final value screen.`;
 }
 
 function starterMap(name: string, baseUrl: string) {
