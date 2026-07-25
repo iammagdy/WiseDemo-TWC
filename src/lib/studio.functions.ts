@@ -3,6 +3,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
+import { normalizePublicUrl, scanWebsite } from "./studio-scanner.server";
 
 export const createProject = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
@@ -15,21 +16,25 @@ export const createProject = createServerFn({ method: "POST" })
       .parse(data),
   )
   .handler(async ({ data, context }) => {
-    const candidate = /^https?:\/\//i.test(data.baseUrl) ? data.baseUrl : `https://${data.baseUrl}`;
-    let baseUrl: URL;
-
+    let baseUrl: string;
     try {
-      baseUrl = new URL(candidate);
+      baseUrl = normalizePublicUrl(data.baseUrl);
     } catch {
       throw new Error("Enter a valid website URL.");
     }
+
+    const scan = await scanWebsite(baseUrl, data.name);
 
     const { data: project, error } = await context.supabase
       .from("projects")
       .insert({
         owner_id: context.userId,
         name: data.name,
-        base_url: baseUrl.origin,
+        base_url: baseUrl,
+        description: scan.description,
+        site_map_md: scan.siteMapMd,
+        site_map_source: "manual",
+        site_map_updated_at: new Date().toISOString(),
       })
       .select("id, name, base_url, description, site_map_md, site_map_updated_at, created_at")
       .single();
@@ -59,7 +64,7 @@ export const getProjectWorkspace = createServerFn({ method: "GET" })
 
     const { data: demos, error: demosError } = await context.supabase
       .from("demos")
-      .select("id, title, feature_prompt, status, progress_pct, current_step, mp4_url, thumbnail_url, duration_seconds, created_at")
+      .select("id, title, feature_prompt, scene_script, status, progress_pct, current_step, mp4_url, thumbnail_url, duration_seconds, created_at")
       .eq("project_id", data.projectId)
       .order("created_at", { ascending: false });
 
@@ -86,6 +91,44 @@ export const getProjectWorkspace = createServerFn({ method: "GET" })
     }
 
     return { project, demos: demos ?? [], credentials };
+  });
+
+export const scanProjectSite = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((data) =>
+    z
+      .object({
+        projectId: z.string().uuid(),
+      })
+      .parse(data),
+  )
+  .handler(async ({ data, context }) => {
+    const { data: existing, error: existingError } = await context.supabase
+      .from("projects")
+      .select("id, name, base_url")
+      .eq("id", data.projectId)
+      .eq("owner_id", context.userId)
+      .maybeSingle();
+
+    if (existingError) throw new Error(existingError.message);
+    if (!existing) throw new Error("Project not found.");
+
+    const scan = await scanWebsite(existing.base_url, existing.name);
+    const { data: project, error } = await context.supabase
+      .from("projects")
+      .update({
+        description: scan.description,
+        site_map_md: scan.siteMapMd,
+        site_map_source: "manual",
+        site_map_updated_at: new Date().toISOString(),
+      })
+      .eq("id", data.projectId)
+      .eq("owner_id", context.userId)
+      .select("id, name, base_url, description, site_map_md, site_map_source, site_map_updated_at, created_at")
+      .single();
+
+    if (error) throw new Error(error.message);
+    return project;
   });
 
 export const saveProjectMap = createServerFn({ method: "POST" })
@@ -216,9 +259,9 @@ export const createDemoJob = createServerFn({ method: "POST" })
       .parse(data),
   )
   .handler(async ({ data, context }) => {
-    const { data: project, error: projectError } = await context.supabase
+    let { data: project, error: projectError } = await context.supabase
       .from("projects")
-      .select("id, name, base_url, site_map_md")
+      .select("id, name, base_url, description, site_map_md")
       .eq("id", data.projectId)
       .eq("owner_id", context.userId)
       .maybeSingle();
@@ -226,11 +269,30 @@ export const createDemoJob = createServerFn({ method: "POST" })
     if (projectError) throw new Error(projectError.message);
     if (!project) throw new Error("Project not found.");
 
+    if (!project.site_map_md) {
+      const scan = await scanWebsite(project.base_url, project.name);
+      const { data: scannedProject, error: scanUpdateError } = await context.supabase
+        .from("projects")
+        .update({
+          description: scan.description,
+          site_map_md: scan.siteMapMd,
+          site_map_source: "manual",
+          site_map_updated_at: new Date().toISOString(),
+        })
+        .eq("id", data.projectId)
+        .eq("owner_id", context.userId)
+        .select("id, name, base_url, description, site_map_md")
+        .single();
+
+      if (scanUpdateError) throw new Error(scanUpdateError.message);
+      project = scannedProject;
+    }
+
     const sceneScript = [
-      { seconds: "0-5", shot: "Open the product and establish the core promise." },
-      { seconds: "5-25", shot: "Walk through the requested feature with real clicks." },
-      { seconds: "25-50", shot: "Show the result state and the product value clearly." },
-      { seconds: "50-69", shot: "Close on the shareable outcome and brand moment." },
+      { seconds: "0-4", shot: `Open ${project.name} at the real URL and show the product context.` },
+      { seconds: "4-10", shot: `Use the visible page map to introduce: ${project.description ?? data.featurePrompt}` },
+      { seconds: "10-18", shot: `Spotlight the requested feature: ${data.featurePrompt}` },
+      { seconds: "18-24", shot: "Close with the clearest value moment and download the rendered browser capture." },
     ];
 
     const { data: demo, error } = await context.supabase
@@ -241,11 +303,13 @@ export const createDemoJob = createServerFn({ method: "POST" })
         title: data.title,
         feature_prompt: data.featurePrompt,
         scene_script: sceneScript,
-        status: "pending",
-        progress_pct: project.site_map_md ? 20 : 10,
-        current_step: project.site_map_md ? "Ready for real-browser recording" : "Waiting for product map",
+        status: "ready",
+        progress_pct: 100,
+        current_step: "Ready — render a real browser-capture video from the project page.",
+        thumbnail_url: `/api/public/screenshot?url=${encodeURIComponent(project.base_url)}&width=1280`,
+        duration_seconds: 24,
       })
-      .select("id, title, feature_prompt, status, progress_pct, current_step, mp4_url, thumbnail_url, duration_seconds, created_at")
+      .select("id, title, feature_prompt, scene_script, status, progress_pct, current_step, mp4_url, thumbnail_url, duration_seconds, created_at")
       .single();
 
     if (error) throw new Error(error.message);
