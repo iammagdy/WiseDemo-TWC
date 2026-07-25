@@ -417,14 +417,12 @@ async function renderDemoVideo({ project, demo }: { project: Workspace["project"
   };
 
   const screenshot = await loadImage(`/api/public/screenshot?url=${encodeURIComponent(project.base_url)}&width=1280`);
-  const script: Array<{ shot?: unknown }> = Array.isArray(demo.scene_script)
-    ? demo.scene_script.filter((item): item is { shot?: unknown } => typeof item === "object" && item !== null)
-    : [];
+  const scriptItems: unknown[] = Array.isArray(demo.scene_script) ? demo.scene_script : [];
   const beats = [
     { text: project.name, subtext: project.description ?? project.base_url, duration: 2600 },
     { text: demo.title, subtext: demo.feature_prompt, duration: 4200 },
-    ...script.slice(0, 3).map((item) => ({
-      text: item.shot ? String(item.shot) : "Real product moment",
+    ...scriptItems.slice(0, 3).map((item) => ({
+      text: getSceneShot(item),
       subtext: project.base_url,
       duration: 4200,
     })),
@@ -454,6 +452,14 @@ function loadImage(src: string) {
     image.onerror = () => reject(new Error("Could not load the real website capture."));
     image.src = src;
   });
+}
+
+function getSceneShot(item: unknown) {
+  if (typeof item === "object" && item !== null && "shot" in item) {
+    const shot = (item as { shot?: unknown }).shot;
+    if (typeof shot === "string" && shot.trim().length > 0) return shot;
+  }
+  return "Real product moment";
 }
 
 async function animateBeat(ctx: CanvasRenderingContext2D, image: HTMLImageElement, text: string, subtext: string, duration: number) {
