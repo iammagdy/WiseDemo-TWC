@@ -288,12 +288,28 @@ export const createDemoJob = createServerFn({ method: "POST" })
       project = scannedProject;
     }
 
-    const sceneScript = [
-      { seconds: "0-4", shot: `Open ${project.name} at the real URL and show the product context.` },
-      { seconds: "4-10", shot: `Use the visible page map to introduce: ${project.description ?? data.featurePrompt}` },
-      { seconds: "10-18", shot: `Spotlight the requested feature: ${data.featurePrompt}` },
-      { seconds: "18-24", shot: "Close with the clearest value moment and download the rendered browser capture." },
-    ];
+    const { data: credentialMeta } = await context.supabase
+      .from("project_credentials")
+      .select("kind, login_url")
+      .eq("project_id", data.projectId)
+      .eq("owner_id", context.userId)
+      .maybeSingle();
+
+    const hasCredentials = credentialMeta?.kind === "password" && Boolean(credentialMeta.login_url);
+
+    const sceneScript = hasCredentials
+      ? [
+          { seconds: "0-5", shot: `Open ${project.name} at the detected sign-in page: ${credentialMeta.login_url}.` },
+          { seconds: "5-12", shot: "Sign in with the saved credentials and wait for the real product workspace to load." },
+          { seconds: "12-32", shot: `Run the requested product flow: ${data.featurePrompt}` },
+          { seconds: "32-45", shot: "Close on the clearest result, export, dashboard, or proof screen." },
+        ]
+      : [
+          { seconds: "0-5", shot: `Open ${project.name} at the public landing page and establish what the product is.` },
+          { seconds: "5-16", shot: "Scroll down through the landing page to show sections, calls to action, and product proof." },
+          { seconds: "16-25", shot: `Spotlight the requested public demo angle: ${data.featurePrompt}` },
+          { seconds: "25-34", shot: "Scroll back up and close on the main call to action without inventing private app screens." },
+        ];
 
     const { data: demo, error } = await context.supabase
       .from("demos")
@@ -305,9 +321,11 @@ export const createDemoJob = createServerFn({ method: "POST" })
         scene_script: sceneScript,
         status: "ready",
         progress_pct: 100,
-        current_step: "Ready — render a real browser-capture video from the project page.",
+        current_step: hasCredentials
+          ? "Ready — render a credential-assisted browser-capture demo."
+          : "Ready — render a public landing-page scroll demo.",
         thumbnail_url: `/api/public/screenshot?url=${encodeURIComponent(project.base_url)}&width=1280`,
-        duration_seconds: 24,
+        duration_seconds: hasCredentials ? 45 : 34,
       })
       .select("id, title, feature_prompt, scene_script, status, progress_pct, current_step, mp4_url, thumbnail_url, duration_seconds, created_at")
       .single();
