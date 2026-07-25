@@ -114,6 +114,10 @@ function ProjectStudio() {
   }
 
   async function handleCreateDemo() {
+    if (featurePrompt.trim().length < 10) {
+      setError("Describe the feature in at least 10 characters.");
+      return;
+    }
     setBusyAction("demo");
     setNotice(null);
     setError(null);
