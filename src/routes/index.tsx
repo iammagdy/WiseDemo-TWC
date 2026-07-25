@@ -16,6 +16,8 @@ export const Route = createFileRoute("/")({
         content:
           "An autonomous browser records a real, polished ≤60s demo of your SaaS. Built for solo founders.",
       },
+      { property: "og:type", content: "website" },
+      { name: "twitter:card", content: "summary_large_image" },
     ],
   }),
   component: Landing,
