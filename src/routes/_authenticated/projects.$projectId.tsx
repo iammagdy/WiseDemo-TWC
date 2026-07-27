@@ -448,3 +448,11 @@ function detectLoginUrlFromMap(siteMapMd: string | null) {
   const match = siteMapMd?.match(/Detected login page:\s*(https?:\/\/\S+)/i);
   return match?.[1]?.replace(/[).,]+$/, "") ?? null;
 }
+
+function starterMap(name: string, baseUrl: string) {
+  return `# ${name} — product map\n\nBase URL: ${baseUrl}\n\n## Real pages discovered\n- ${baseUrl}\n\n## Important visible sections\n- Hero\n- Product value\n- Call to action\n\n## Clicks and calls to action to film\n- Scroll the landing page\n- Highlight primary CTA\n- End on value proof\n`;
+}
+
+function defaultFeaturePrompt(name: string) {
+  return `Show how a new user experiences ${name}: land on the site, scroll the value props, and end on the main call to action.`;
+}
