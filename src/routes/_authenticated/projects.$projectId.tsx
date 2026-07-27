@@ -371,13 +371,7 @@ function ProjectStudio() {
               ) : (
                 <div className="grid gap-3">
                   {workspace.demos.map((demo) => (
-                    <DemoRow
-                      key={demo.id}
-                      demo={demo}
-                      renderedVideo={renderedVideos[demo.id]}
-                      isRendering={renderingDemoId === demo.id}
-                      onRender={() => handleRenderDemo(demo)}
-                    />
+                    <DemoRow key={demo.id} demo={demo} />
                   ))}
                 </div>
               )}
