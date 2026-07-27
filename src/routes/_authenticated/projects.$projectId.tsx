@@ -210,14 +210,14 @@ function ProjectStudio() {
         ) : project && workspace ? (
           <>
             <section className="grid gap-6 lg:grid-cols-[1.35fr_0.65fr] lg:items-end">
-              <div>
+              <div className="min-w-0">
                 <p className="font-mono-tight text-xs uppercase text-primary">/// Project reel</p>
-                <h1 className="mt-2 text-3xl font-semibold md:text-5xl">{project.name}</h1>
-                <p className="mt-3 max-w-2xl text-sm text-muted-foreground md:text-base">{project.base_url}</p>
+                <h1 className="mt-2 break-words text-2xl font-semibold sm:text-3xl md:text-5xl">{project.name}</h1>
+                <p className="mt-3 max-w-2xl break-all text-sm text-muted-foreground md:text-base">{project.base_url}</p>
               </div>
               <div className="grid grid-cols-3 gap-2 rounded-lg border border-border bg-card p-2">
                 {status.map((item) => (
-                  <div key={item.label} className="rounded-md bg-background px-3 py-2 text-center">
+                  <div key={item.label} className="rounded-md bg-background px-2 py-2 text-center text-sm sm:px-3">
                     <div className={item.done ? "text-primary" : "text-muted-foreground"}>{item.done ? "Ready" : "Open"}</div>
                     <div className="mt-1 text-xs text-muted-foreground">{item.label}</div>
                   </div>
@@ -363,8 +363,8 @@ function DemoRow({
   onRender: () => void;
 }) {
   return (
-    <article className="rounded-lg border border-border bg-card p-4">
-      <div className="grid gap-4 lg:grid-cols-[1fr_280px] lg:items-center">
+      <article className="rounded-lg border border-border bg-card p-4">
+      <div className="grid gap-4 md:grid-cols-[1fr_280px] md:items-center">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
             <span className="rounded-sm border border-border px-2 py-0.5 font-mono-tight text-xs uppercase text-muted-foreground">
@@ -372,7 +372,7 @@ function DemoRow({
             </span>
             <span className="text-sm text-muted-foreground">{demo.progress_pct}%</span>
           </div>
-          <h3 className="mt-2 font-semibold">{demo.title}</h3>
+          <h3 className="mt-2 break-words font-semibold">{demo.title}</h3>
           <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">{demo.feature_prompt}</p>
           <div className="mt-2 text-sm text-muted-foreground">{demo.current_step ?? "Queued"}</div>
         </div>

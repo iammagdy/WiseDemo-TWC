@@ -20,11 +20,11 @@ export function Landing() {
     <div className="min-h-screen bg-background text-foreground overflow-x-hidden">
       {/* Nav */}
       <header className="sticky top-0 z-40 border-b border-border/60 bg-background/80 backdrop-blur">
-        <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-4">
-          <Link to="/" className="flex items-center gap-2">
-            <Clapper className="h-6 w-6 text-primary" />
-            <span className="font-mono-tight text-lg font-semibold tracking-tight">DemoForge</span>
-            <span className="ml-2 rounded-sm border border-border px-1.5 py-0.5 font-mono-tight text-[10px] uppercase text-muted-foreground">
+        <div className="mx-auto flex max-w-7xl items-center justify-between gap-3 px-4 py-3 sm:px-6 sm:py-4">
+          <Link to="/" className="flex min-w-0 items-center gap-2">
+            <Clapper className="h-6 w-6 shrink-0 text-primary" />
+            <span className="font-mono-tight text-base font-semibold tracking-tight sm:text-lg">DemoForge</span>
+            <span className="ml-1 hidden rounded-sm border border-border px-1.5 py-0.5 font-mono-tight text-[10px] uppercase text-muted-foreground sm:inline">
               REC
             </span>
           </Link>
@@ -33,13 +33,13 @@ export function Landing() {
             <a href="#showcase" className="hover:text-foreground">Showcase</a>
             <a href="#pricing" className="hover:text-foreground">Pricing</a>
           </nav>
-          <div className="flex items-center gap-3">
-            <Link to="/auth" className="text-sm text-muted-foreground hover:text-foreground">
+          <div className="flex shrink-0 items-center gap-2 sm:gap-3">
+            <Link to="/auth" className="hidden text-sm text-muted-foreground hover:text-foreground sm:inline">
               Sign in
             </Link>
             <Link
               to="/auth"
-              className="rounded-md bg-primary px-3.5 py-2 text-sm font-medium text-primary-foreground shadow-[var(--shadow-glow)] transition hover:opacity-90"
+              className="rounded-md bg-primary px-3 py-2 text-xs font-medium text-primary-foreground shadow-[var(--shadow-glow)] transition hover:opacity-90 sm:px-3.5 sm:text-sm"
             >
               Start filming
             </Link>
@@ -52,13 +52,13 @@ export function Landing() {
         <div className="pointer-events-none absolute inset-0 -z-10">
           <div className="absolute inset-x-0 top-0 h-[600px] bg-gradient-to-b from-primary/15 via-primary/5 to-transparent blur-3xl" />
         </div>
-        <div className="mx-auto grid max-w-7xl gap-16 px-6 pt-20 pb-24 lg:grid-cols-[1.15fr_0.85fr] lg:gap-10 lg:pt-28">
+        <div className="mx-auto grid max-w-7xl gap-12 px-4 pt-12 pb-16 sm:px-6 sm:pt-20 sm:pb-24 lg:grid-cols-[1.15fr_0.85fr] lg:gap-10 lg:pt-28">
           <div className="flex flex-col justify-center">
             <div className="mb-6 inline-flex w-fit items-center gap-2 rounded-full border border-border bg-card/60 px-3 py-1 font-mono-tight text-[11px] uppercase tracking-wider text-muted-foreground">
               <span className="h-1.5 w-1.5 rounded-full bg-primary animate-record" />
               Now filming • v1 preview
             </div>
-            <h1 className="text-balance font-sans text-5xl font-semibold leading-[1.02] tracking-tight md:text-7xl">
+            <h1 className="text-balance font-sans text-4xl font-semibold leading-[1.05] tracking-tight sm:text-5xl md:text-7xl">
               Your SaaS,
               <br />
               <span className="italic" style={{ fontFamily: "'Instrument Serif', serif", fontWeight: 400 }}>
@@ -66,7 +66,7 @@ export function Landing() {
               </span>{" "}
               in 60&nbsp;seconds.
             </h1>
-            <p className="mt-6 max-w-xl text-lg leading-relaxed text-muted-foreground">
+            <p className="mt-6 max-w-xl text-base leading-relaxed text-muted-foreground sm:text-lg">
               Drop your URL. DemoForge maps your product, scripts the flow with AI, drives a real browser,
               and hands you a cinematic ≤60-second demo — ready for X, LinkedIn, and Product Hunt.
             </p>
@@ -76,9 +76,9 @@ export function Landing() {
                 e.preventDefault();
                 window.location.href = `/auth?url=${encodeURIComponent(url)}`;
               }}
-              className="mt-8 flex w-full max-w-xl items-center gap-2 rounded-xl border border-border bg-card p-2 shadow-[var(--shadow-glow)]"
+              className="mt-8 flex w-full max-w-xl flex-wrap items-center gap-2 rounded-xl border border-border bg-card p-2 shadow-[var(--shadow-glow)] sm:flex-nowrap"
             >
-              <div className="flex items-center gap-2 pl-3 font-mono-tight text-xs text-muted-foreground">
+              <div className="flex shrink-0 items-center gap-2 pl-3 font-mono-tight text-xs text-muted-foreground">
                 <span className="h-1.5 w-1.5 rounded-full bg-primary animate-record" />
                 https://
               </div>
@@ -86,13 +86,13 @@ export function Landing() {
                 value={url}
                 onChange={(e) => setUrl(e.target.value)}
                 placeholder="yoursaas.com"
-                className="flex-1 bg-transparent px-1 py-2 text-base outline-none placeholder:text-muted-foreground/60"
+                className="min-w-0 flex-1 bg-transparent px-1 py-2 text-base outline-none placeholder:text-muted-foreground/60"
                 autoComplete="off"
                 spellCheck={false}
               />
               <button
                 type="submit"
-                className="rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground transition hover:opacity-90"
+                className="w-full shrink-0 rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground transition hover:opacity-90 sm:w-auto"
               >
                 Roll cameras →
               </button>
@@ -101,7 +101,7 @@ export function Landing() {
               Free tier • 3 demos • No credit card
             </p>
 
-            <div className="mt-12 grid grid-cols-3 gap-6 border-t border-border pt-6 text-sm">
+            <div className="mt-12 grid grid-cols-3 gap-3 border-t border-border pt-6 text-sm sm:gap-6">
               <Stat k="≤60s" v="Final cut" />
               <Stat k="1080p" v="Real browser" />
               <Stat k="0" v="Editors hired" />
@@ -109,7 +109,7 @@ export function Landing() {
           </div>
 
           {/* Film-strip preview panel */}
-          <div className="relative">
+          <div className="relative mt-4 lg:mt-0">
             <div className="absolute -inset-6 -z-10 rounded-3xl bg-gradient-to-br from-primary/20 via-transparent to-transparent blur-2xl" />
             <div className="overflow-hidden rounded-2xl border border-border bg-card">
               {/* Title bar */}
@@ -176,13 +176,13 @@ export function Landing() {
       </section>
 
       {/* How it works */}
-      <section id="how" className="mx-auto max-w-7xl px-6 py-28">
-        <div className="mb-16 flex items-end justify-between gap-8">
+      <section id="how" className="mx-auto max-w-7xl px-4 py-16 sm:px-6 sm:py-28">
+        <div className="mb-10 flex flex-col items-start justify-between gap-6 sm:mb-16 md:flex-row md:items-end md:gap-8">
           <div>
             <p className="mb-3 font-mono-tight text-xs uppercase tracking-widest text-primary">
               /// Production pipeline
             </p>
-            <h2 className="max-w-2xl text-4xl font-semibold tracking-tight md:text-5xl">
+            <h2 className="max-w-2xl text-3xl font-semibold tracking-tight sm:text-4xl md:text-5xl">
               Four takes. One cinematic cut.
             </h2>
           </div>
@@ -211,15 +211,15 @@ export function Landing() {
       </section>
 
       {/* Showcase */}
-      <section id="showcase" className="border-t border-border bg-card/30 py-28">
-        <div className="mx-auto max-w-7xl px-6">
+      <section id="showcase" className="border-t border-border bg-card/30 py-16 sm:py-28">
+        <div className="mx-auto max-w-7xl px-4 sm:px-6">
           <p className="mb-3 font-mono-tight text-xs uppercase tracking-widest text-primary">
             /// Dailies
           </p>
-          <h2 className="max-w-2xl text-4xl font-semibold tracking-tight md:text-5xl">
+          <h2 className="max-w-2xl text-3xl font-semibold tracking-tight sm:text-4xl md:text-5xl">
             Real recordings. Real products.
           </h2>
-          <div className="mt-12 grid gap-6 md:grid-cols-3">
+          <div className="mt-10 grid gap-6 sm:grid-cols-2 md:grid-cols-3">
             {[1, 2, 3].map((n) => (
               <div
                 key={n}
@@ -239,18 +239,18 @@ export function Landing() {
       </section>
 
       {/* Pricing */}
-      <section id="pricing" className="mx-auto max-w-7xl px-6 py-28">
+      <section id="pricing" className="mx-auto max-w-7xl px-4 py-16 sm:px-6 sm:py-28">
         <p className="mb-3 font-mono-tight text-xs uppercase tracking-widest text-primary">
           /// Rate card
         </p>
-        <h2 className="max-w-2xl text-4xl font-semibold tracking-tight md:text-5xl">
+        <h2 className="max-w-2xl text-3xl font-semibold tracking-tight sm:text-4xl md:text-5xl">
           Studio budget, indie prices.
         </h2>
-        <div className="mt-12 grid gap-4 md:grid-cols-3">
+        <div className="mt-10 grid gap-4 sm:grid-cols-2 md:grid-cols-3">
           {PLANS.map((p) => (
             <div
               key={p.name}
-              className={`relative flex flex-col rounded-2xl border p-8 ${
+              className={`relative flex flex-col rounded-2xl border p-6 sm:p-8 ${
                 p.featured
                   ? "border-primary bg-card shadow-[var(--shadow-glow)]"
                   : "border-border bg-card/60"
@@ -294,9 +294,9 @@ export function Landing() {
 
       {/* CTA */}
       <section className="border-t border-border">
-        <div className="mx-auto max-w-4xl px-6 py-24 text-center">
+        <div className="mx-auto max-w-4xl px-4 py-16 text-center sm:px-6 sm:py-24">
           <Clapper className="mx-auto mb-6 h-10 w-10 text-primary animate-snap" />
-          <h2 className="text-4xl font-semibold tracking-tight md:text-5xl">
+          <h2 className="text-3xl font-semibold tracking-tight sm:text-4xl md:text-5xl">
             Roll the first take.
           </h2>
           <p className="mx-auto mt-4 max-w-lg text-muted-foreground">
