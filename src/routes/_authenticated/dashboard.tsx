@@ -54,15 +54,15 @@ function Dashboard() {
   return (
     <div className="min-h-screen bg-background text-foreground">
       <header className="border-b border-border">
-        <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-4">
-          <Link to="/" className="flex items-center gap-2">
+        <div className="mx-auto flex max-w-6xl items-center justify-between gap-3 px-4 py-4 sm:px-6">
+          <Link to="/" className="flex min-w-0 items-center gap-2">
             <span className="h-2 w-2 rounded-full bg-primary animate-record" />
             <span className="font-mono-tight text-sm font-semibold">DemoForge</span>
-            <span className="ml-2 rounded-sm border border-border px-1.5 py-0.5 font-mono-tight text-[10px] uppercase text-muted-foreground">
+            <span className="ml-2 hidden rounded-sm border border-border px-1.5 py-0.5 font-mono-tight text-[10px] uppercase text-muted-foreground sm:inline">
               Studio
             </span>
           </Link>
-          <div className="flex items-center gap-3 text-sm">
+          <div className="flex shrink-0 items-center gap-3 text-sm">
             <span className="hidden text-muted-foreground md:inline">{user?.email}</span>
             <Button
               variant="outline"
@@ -70,20 +70,21 @@ function Dashboard() {
               onClick={signOut}
             >
               <LogOut />
-              Sign out
+              <span className="hidden sm:inline">Sign out</span>
             </Button>
           </div>
         </div>
       </header>
 
-      <main className="mx-auto max-w-6xl px-6 py-12">
-        <div className="flex items-end justify-between gap-6">
-          <div>
+      <main className="mx-auto max-w-6xl px-4 py-8 sm:px-6 sm:py-12">
+        <div className="flex flex-col items-start justify-between gap-4 sm:flex-row sm:items-end sm:gap-6">
+          <div className="min-w-0">
             <p className="font-mono-tight text-xs uppercase tracking-widest text-primary">/// Call sheet</p>
-            <h1 className="mt-2 text-3xl font-semibold tracking-tight md:text-4xl">Your productions</h1>
+            <h1 className="mt-2 text-2xl font-semibold tracking-tight sm:text-3xl md:text-4xl">Your productions</h1>
           </div>
           <Button
             onClick={() => setOpen(true)}
+            className="w-full sm:w-auto"
           >
             <Plus />
             New project
