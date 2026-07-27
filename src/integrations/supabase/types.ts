@@ -63,13 +63,17 @@ export type Database = {
           feature_prompt: string
           id: string
           is_public: boolean
+          live_view_url: string | null
           mp4_url: string | null
           owner_id: string
           progress_pct: number
           project_id: string
+          recording_url: string | null
           scene_script: Json | null
+          session_viewer_url: string | null
           share_slug: string | null
           status: Database["public"]["Enums"]["demo_status"]
+          steel_session_id: string | null
           thumbnail_url: string | null
           title: string
           updated_at: string
@@ -84,13 +88,17 @@ export type Database = {
           feature_prompt: string
           id?: string
           is_public?: boolean
+          live_view_url?: string | null
           mp4_url?: string | null
           owner_id: string
           progress_pct?: number
           project_id: string
+          recording_url?: string | null
           scene_script?: Json | null
+          session_viewer_url?: string | null
           share_slug?: string | null
           status?: Database["public"]["Enums"]["demo_status"]
+          steel_session_id?: string | null
           thumbnail_url?: string | null
           title: string
           updated_at?: string
@@ -105,13 +113,17 @@ export type Database = {
           feature_prompt?: string
           id?: string
           is_public?: boolean
+          live_view_url?: string | null
           mp4_url?: string | null
           owner_id?: string
           progress_pct?: number
           project_id?: string
+          recording_url?: string | null
           scene_script?: Json | null
+          session_viewer_url?: string | null
           share_slug?: string | null
           status?: Database["public"]["Enums"]["demo_status"]
+          steel_session_id?: string | null
           thumbnail_url?: string | null
           title?: string
           updated_at?: string
@@ -349,6 +361,7 @@ export type Database = {
       credential_kind: "none" | "cookie" | "password"
       demo_status:
         | "pending"
+        | "starting"
         | "scanning"
         | "planning"
         | "recording"
@@ -488,6 +501,7 @@ export const Constants = {
       credential_kind: ["none", "cookie", "password"],
       demo_status: [
         "pending",
+        "starting",
         "scanning",
         "planning",
         "recording",

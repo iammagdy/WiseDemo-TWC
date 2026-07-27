@@ -1,14 +1,16 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
-import { ArrowLeft, Download, ExternalLink, Film, KeyRound, Loader2, Map, Play, RefreshCw, Save, Sparkles, Wand2 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { ArrowLeft, ExternalLink, Film, KeyRound, Loader2, Map, Play, RefreshCw, Save, Sparkles } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import {
   createDemoJob,
+  getDemoStatus,
   getProjectWorkspace,
+  runDemoScenes,
   scanProjectSite,
   saveProjectCredential,
   saveProjectMap,
@@ -30,11 +32,6 @@ export const Route = createFileRoute("/_authenticated/projects/$projectId")({
 
 type Workspace = Awaited<ReturnType<typeof getProjectWorkspace>>;
 type Demo = Workspace["demos"][number];
-type RenderedVideo = {
-  url: string;
-  blob: Blob;
-  mimeType: string;
-};
 
 function ProjectStudio() {
   const { projectId } = Route.useParams();
@@ -43,6 +40,8 @@ function ProjectStudio() {
   const saveCredential = useServerFn(saveProjectCredential);
   const createDemo = useServerFn(createDemoJob);
   const scanSite = useServerFn(scanProjectSite);
+  const runScenes = useServerFn(runDemoScenes);
+  const fetchDemoStatus = useServerFn(getDemoStatus);
 
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
   const [loading, setLoading] = useState(true);
@@ -55,9 +54,8 @@ function ProjectStudio() {
   const [demoTitle, setDemoTitle] = useState("");
   const [featurePrompt, setFeaturePrompt] = useState("");
   const [busyAction, setBusyAction] = useState<"map" | "creds" | "demo" | "scan" | null>(null);
-  const [renderingDemoId, setRenderingDemoId] = useState<string | null>(null);
-  const [renderedVideos, setRenderedVideos] = useState<Record<string, RenderedVideo>>({});
   const [notice, setNotice] = useState<string | null>(null);
+  const pollingRef = useRef<Set<string>>(new Set());
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -152,8 +150,24 @@ function ProjectStudio() {
     try {
       const demo = await createDemo({ data: { projectId, title: demoTitle, featurePrompt } });
       setWorkspace((current) => (current ? { ...current, demos: [demo, ...current.demos] } : current));
-      setNotice("Demo script created. Rendering real browser-capture video…");
-      await handleRenderDemo(demo);
+      setNotice("Real cloud browser launched. Watch it drive your site live below.");
+      // Kick off scene execution in the background, then poll
+      void runScenes({ data: { demoId: demo.id } })
+        .then((result) => {
+          setWorkspace((current) => {
+            if (!current) return current;
+            return {
+              ...current,
+              demos: current.demos.map((d) =>
+                d.id === demo.id ? { ...d, ...result } : d,
+              ),
+            };
+          });
+        })
+        .catch((err: unknown) => {
+          setError(err instanceof Error ? err.message : "Recording finished with an error.");
+        });
+      startPolling(demo.id);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Could not queue the demo.");
     } finally {
@@ -161,21 +175,45 @@ function ProjectStudio() {
     }
   }
 
-  async function handleRenderDemo(demo: Demo) {
-    if (!workspace?.project) return;
-    setRenderingDemoId(demo.id);
-    setNotice(null);
-    setError(null);
-    try {
-      const video = await renderDemoVideo({ project: workspace.project, demo });
-      setRenderedVideos((current) => ({ ...current, [demo.id]: video }));
-      setNotice("Real demo video rendered. Download it from the demo queue.");
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Could not render the browser-capture video.");
-    } finally {
-      setRenderingDemoId(null);
+  const startPolling = useCallback(
+    (demoId: string) => {
+      if (pollingRef.current.has(demoId)) return;
+      pollingRef.current.add(demoId);
+      const tick = async () => {
+        try {
+          const status = await fetchDemoStatus({ data: { demoId } });
+          setWorkspace((current) => {
+            if (!current) return current;
+            return {
+              ...current,
+              demos: current.demos.map((d) =>
+                d.id === demoId ? { ...d, ...status } : d,
+              ),
+            };
+          });
+          if (status.status === "ready" || status.status === "failed") {
+            pollingRef.current.delete(demoId);
+            return;
+          }
+        } catch {
+          /* ignore transient errors */
+        }
+        setTimeout(tick, 3000);
+      };
+      setTimeout(tick, 2500);
+    },
+    [fetchDemoStatus],
+  );
+
+  // Resume polling for any in-flight demos when workspace loads
+  useEffect(() => {
+    if (!workspace) return;
+    for (const demo of workspace.demos) {
+      if (demo.status === "starting" || demo.status === "recording") {
+        startPolling(demo.id);
+      }
     }
-  }
+  }, [startPolling, workspace]);
 
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -333,13 +371,7 @@ function ProjectStudio() {
               ) : (
                 <div className="grid gap-3">
                   {workspace.demos.map((demo) => (
-                    <DemoRow
-                      key={demo.id}
-                      demo={demo}
-                      renderedVideo={renderedVideos[demo.id]}
-                      isRendering={renderingDemoId === demo.id}
-                      onRender={() => handleRenderDemo(demo)}
-                    />
+                    <DemoRow key={demo.id} demo={demo} />
                   ))}
                 </div>
               )}
@@ -351,55 +383,60 @@ function ProjectStudio() {
   );
 }
 
-function DemoRow({
-  demo,
-  renderedVideo,
-  isRendering,
-  onRender,
-}: {
-  demo: Demo;
-  renderedVideo?: RenderedVideo;
-  isRendering: boolean;
-  onRender: () => void;
-}) {
+
+function DemoRow({ demo }: { demo: Demo }) {
+  const embedUrl = demo.live_view_url ?? demo.session_viewer_url ?? demo.recording_url ?? null;
+  const isLive = demo.status === "starting" || demo.status === "recording";
+  const isReady = demo.status === "ready";
   return (
-      <article className="rounded-lg border border-border bg-card p-4">
-      <div className="grid gap-4 md:grid-cols-[1fr_280px] md:items-center">
+    <article className="rounded-lg border border-border bg-card p-4">
+      <div className="grid gap-4 md:grid-cols-[1fr_360px] md:items-start">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
             <span className="rounded-sm border border-border px-2 py-0.5 font-mono-tight text-xs uppercase text-muted-foreground">
               {demo.status}
             </span>
             <span className="text-sm text-muted-foreground">{demo.progress_pct}%</span>
+            {isLive ? (
+              <span className="flex items-center gap-1.5 rounded-sm bg-primary/10 px-2 py-0.5 text-xs font-semibold text-primary">
+                <span className="h-2 w-2 animate-pulse rounded-full bg-primary" />
+                LIVE
+              </span>
+            ) : null}
           </div>
           <h3 className="mt-2 break-words font-semibold">{demo.title}</h3>
           <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">{demo.feature_prompt}</p>
           <div className="mt-2 text-sm text-muted-foreground">{demo.current_step ?? "Queued"}</div>
+          {demo.error_message ? (
+            <div className="mt-2 rounded-md border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive">
+              {demo.error_message}
+            </div>
+          ) : null}
+          {embedUrl ? (
+            <a
+              href={embedUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mt-3 inline-flex items-center gap-1.5 text-xs font-semibold text-primary hover:underline"
+            >
+              <ExternalLink className="h-3.5 w-3.5" />
+              {isReady ? "Open replay in new tab" : "Open live session in new tab"}
+            </a>
+          ) : null}
         </div>
         <div className="flex flex-col gap-2">
-          {renderedVideo ? (
-            <video
-              src={renderedVideo.url}
-              controls
-              playsInline
-              preload="metadata"
-              className="aspect-video w-full rounded-md border border-border bg-background object-cover"
+          {embedUrl ? (
+            <iframe
+              src={embedUrl}
+              title={demo.title}
+              className="aspect-video w-full rounded-md border border-border bg-background"
+              allow="clipboard-read; clipboard-write"
+              sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
             />
           ) : (
             <div className="flex aspect-video w-full items-center justify-center rounded-md border border-border bg-background text-muted-foreground">
-              {isRendering ? <Loader2 className="animate-spin" /> : <Film className="h-7 w-7" />}
+              {isLive ? <Loader2 className="h-6 w-6 animate-spin" /> : <Film className="h-7 w-7" />}
             </div>
-          )}
-          {renderedVideo ? (
-            <Button onClick={() => downloadVideo(renderedVideo, demo.title)}>
-              <Download />
-              Download video
-            </Button>
-          ) : (
-            <Button variant="outline" onClick={onRender} disabled={isRendering}>
-              {isRendering ? <Loader2 className="animate-spin" /> : <Wand2 />}
-              {isRendering ? "Rendering…" : "Render video"}
-            </Button>
           )}
         </div>
       </div>
@@ -407,365 +444,15 @@ function DemoRow({
   );
 }
 
-async function renderDemoVideo({ project, demo }: { project: Workspace["project"]; demo: Demo }) {
-  if (typeof window === "undefined") throw new Error("Video rendering only runs in the browser.");
-  if (typeof MediaRecorder === "undefined") throw new Error("Your browser does not support video rendering here.");
-
-  const canvas = document.createElement("canvas");
-  canvas.width = 1280;
-  canvas.height = 720;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) throw new Error("Could not start the video renderer.");
-
-  const stream = canvas.captureStream(30);
-  const mimeType = MediaRecorder.isTypeSupported("video/webm;codecs=vp9")
-    ? "video/webm;codecs=vp9"
-    : MediaRecorder.isTypeSupported("video/webm;codecs=vp8")
-      ? "video/webm;codecs=vp8"
-      : "video/webm";
-  const recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 4_000_000 });
-  const chunks: Blob[] = [];
-  recorder.ondataavailable = (event) => {
-    if (event.data.size > 0) chunks.push(event.data);
-  };
-
-  const screenshot = await loadImage(`/api/public/screenshot?url=${encodeURIComponent(project.base_url)}&width=1280`).catch(() => null);
-  const pageModel = buildPageModel(project.name, project.base_url, project.description, project.site_map_md);
-  const scriptItems: unknown[] = Array.isArray(demo.scene_script) ? demo.scene_script : [];
-  const beats = [
-    { text: project.name, subtext: project.description ?? project.base_url, duration: 2800, motion: "intro" as const },
-    { text: demo.title, subtext: demo.feature_prompt, duration: 4200, motion: "down" as const },
-    ...scriptItems.slice(0, 3).map((item) => ({
-      text: getSceneShot(item),
-      subtext: project.base_url,
-      duration: 4600,
-      motion: sceneMotion(getSceneShot(item)),
-    })),
-    { text: "Ready to share", subtext: "Recorded from the real website URL", duration: 3200, motion: "up" as const },
-  ];
-
-  const done = new Promise<RenderedVideo>((resolve, reject) => {
-    recorder.onerror = () => reject(new Error("The browser video recorder failed while encoding the demo."));
-    recorder.onstop = () => {
-      const blob = new Blob(chunks, { type: "video/webm" });
-      if (blob.size < 10_000) {
-        reject(new Error("The browser produced an empty video. Try rendering again."));
-        return;
-      }
-      resolve({ url: URL.createObjectURL(blob), blob, mimeType: "video/webm" });
-    };
-  });
-
-  drawFrame(ctx, screenshot, pageModel, beats[0].text, beats[0].subtext, 0, beats[0].motion);
-  recorder.start(500);
-  for (const beat of beats) {
-    await animateBeat(ctx, screenshot, pageModel, beat.text, beat.subtext, beat.duration, beat.motion);
-  }
-  if (recorder.state === "recording") {
-    recorder.requestData();
-    recorder.stop();
-  }
-  return done;
-}
-
-function downloadVideo(video: RenderedVideo, title: string) {
-  const fileName = `${title.replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "").toLowerCase() || "demo"}-demoforge.webm`;
-  const anchor = document.createElement("a");
-  anchor.href = video.url;
-  anchor.download = fileName;
-  anchor.rel = "noopener";
-  anchor.style.display = "none";
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-
-  if (!("download" in HTMLAnchorElement.prototype)) {
-    window.open(video.url, "_blank", "noopener,noreferrer");
-  }
-}
-
-function loadImage(src: string) {
-  return new Promise<HTMLImageElement>((resolve, reject) => {
-    const image = new Image();
-    image.crossOrigin = "anonymous";
-    image.onload = () => resolve(image);
-    image.onerror = () => reject(new Error("Could not load the real website capture."));
-    image.src = src;
-  });
-}
-
-function getSceneShot(item: unknown) {
-  if (typeof item === "object" && item !== null && "shot" in item) {
-    const shot = (item as { shot?: unknown }).shot;
-    if (typeof shot === "string" && shot.trim().length > 0) return shot;
-  }
-  return "Real product moment";
-}
-
-type PageModel = {
-  title: string;
-  baseUrl: string;
-  description: string;
-  headings: string[];
-  pages: string[];
-  actions: string[];
-};
-
-type DemoMotion = "intro" | "down" | "up";
-
-async function animateBeat(
-  ctx: CanvasRenderingContext2D,
-  image: HTMLImageElement | null,
-  pageModel: PageModel,
-  text: string,
-  subtext: string,
-  duration: number,
-  motion: DemoMotion,
-) {
-  const start = performance.now();
-  const end = start + duration;
-
-  while (performance.now() < end) {
-    const now = performance.now();
-    const progress = Math.min(1, (now - start) / duration);
-    const eased = easeInOut(progress);
-    drawFrame(ctx, image, pageModel, text, subtext, eased, motion);
-    await new Promise((resolve) => requestAnimationFrame(resolve));
-  }
-}
-
-function drawFrame(
-  ctx: CanvasRenderingContext2D,
-  image: HTMLImageElement | null,
-  pageModel: PageModel,
-  text: string,
-  subtext: string,
-  progress: number,
-  motion: DemoMotion,
-) {
-  const width = ctx.canvas.width;
-  const height = ctx.canvas.height;
-  ctx.fillStyle = "#090706";
-  ctx.fillRect(0, 0, width, height);
-
-  drawBrowserChrome(ctx, 70, 52, width - 140, height - 118);
-  const viewport = { x: 94, y: 108, width: width - 188, height: height - 196 };
-  ctx.save();
-  ctx.beginPath();
-  ctx.rect(viewport.x, viewport.y, viewport.width, viewport.height);
-  ctx.clip();
-
-  const scroll = motion === "down" ? progress : motion === "up" ? 1 - progress : 0.12 + progress * 0.15;
-  if (image) {
-    drawCapturedPage(ctx, image, viewport, scroll);
-  }
-  drawScannedPage(ctx, pageModel, viewport, scroll, image ? 0.72 : 1);
-  ctx.restore();
-  ctx.globalAlpha = 1;
-
-  const gradient = ctx.createLinearGradient(0, 0, 0, height);
-  gradient.addColorStop(0, "rgba(9,7,6,0.12)");
-  gradient.addColorStop(0.55, "rgba(9,7,6,0.08)");
-  gradient.addColorStop(1, "rgba(9,7,6,0.94)");
-  ctx.fillStyle = gradient;
-  ctx.fillRect(0, 0, width, height);
-
-  const cursorX = viewport.x + 130 + progress * (viewport.width - 260);
-  const cursorY = viewport.y + 100 + Math.sin(progress * Math.PI) * (viewport.height - 210);
-  ctx.fillStyle = "#ff5a1f";
-  ctx.beginPath();
-  ctx.arc(cursorX, cursorY, 18 + Math.sin(progress * Math.PI * 4) * 4, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.strokeStyle = "rgba(255,255,255,0.9)";
-  ctx.lineWidth = 5;
-  ctx.stroke();
-
-  ctx.fillStyle = "#ff5a1f";
-  ctx.fillRect(72, 70, 86, 6);
-  ctx.fillStyle = "#f5f5f5";
-  ctx.font = "700 44px Inter, Arial, sans-serif";
-  wrapText(ctx, text, 72, 560, 860, 50, 2);
-  ctx.fillStyle = "rgba(245,245,245,0.72)";
-  ctx.font = "500 24px Inter, Arial, sans-serif";
-  wrapText(ctx, subtext, 72, 622, 900, 31, 2);
-}
-
-function drawBrowserChrome(ctx: CanvasRenderingContext2D, x: number, y: number, width: number, height: number) {
-  ctx.fillStyle = "rgba(245,245,245,0.94)";
-  roundRect(ctx, x, y, width, height, 22);
-  ctx.fill();
-  ctx.fillStyle = "rgba(16,14,12,0.92)";
-  roundRect(ctx, x + 18, y + 16, width - 36, 38, 14);
-  ctx.fill();
-  ["#ff5a1f", "#f2b84b", "#2ac769"].forEach((color, index) => {
-    ctx.fillStyle = color;
-    ctx.beginPath();
-    ctx.arc(x + 38 + index * 22, y + 35, 7, 0, Math.PI * 2);
-    ctx.fill();
-  });
-}
-
-function drawCapturedPage(
-  ctx: CanvasRenderingContext2D,
-  image: HTMLImageElement,
-  viewport: { x: number; y: number; width: number; height: number },
-  scroll: number,
-) {
-  ctx.globalAlpha = 1;
-  const coverScale = Math.max(viewport.width / image.naturalWidth, viewport.height / image.naturalHeight);
-  const drawWidth = image.naturalWidth * coverScale;
-  const drawHeight = image.naturalHeight * coverScale * 1.55;
-  const y = viewport.y - Math.max(0, drawHeight - viewport.height) * scroll;
-  ctx.drawImage(image, viewport.x - (drawWidth - viewport.width) / 2, y, drawWidth, drawHeight);
-}
-
-function drawScannedPage(
-  ctx: CanvasRenderingContext2D,
-  page: PageModel,
-  viewport: { x: number; y: number; width: number; height: number },
-  scroll: number,
-  alpha: number,
-) {
-  const pageHeight = viewport.height * 2.25;
-  const offsetY = -Math.max(0, pageHeight - viewport.height) * scroll;
-  ctx.save();
-  ctx.globalAlpha = alpha;
-  ctx.fillStyle = "#f7f2ec";
-  ctx.fillRect(viewport.x, viewport.y + offsetY, viewport.width, pageHeight);
-
-  ctx.fillStyle = "#15110f";
-  ctx.font = "800 50px Inter, Arial, sans-serif";
-  wrapText(ctx, page.title, viewport.x + 56, viewport.y + offsetY + 106, viewport.width - 360, 58, 2);
-  ctx.fillStyle = "rgba(21,17,15,0.72)";
-  ctx.font = "500 24px Inter, Arial, sans-serif";
-  wrapText(ctx, page.description, viewport.x + 56, viewport.y + offsetY + 228, viewport.width - 420, 34, 3);
-  ctx.fillStyle = "#ff5a1f";
-  roundRect(ctx, viewport.x + 56, viewport.y + offsetY + 360, 190, 48, 10);
-  ctx.fill();
-  ctx.fillStyle = "#fffaf6";
-  ctx.font = "800 18px Inter, Arial, sans-serif";
-  ctx.fillText("Primary CTA", viewport.x + 90, viewport.y + offsetY + 391);
-
-  const sections = [
-    { title: "Pages discovered", items: page.pages },
-    { title: "Visible sections", items: page.headings },
-    { title: "Actions to film", items: page.actions },
-  ];
-  sections.forEach((section, sectionIndex) => {
-    const sectionY = viewport.y + offsetY + 510 + sectionIndex * 330;
-    ctx.fillStyle = "rgba(255,255,255,0.92)";
-    roundRect(ctx, viewport.x + 44, sectionY, viewport.width - 88, 250, 18);
-    ctx.fill();
-    ctx.fillStyle = "#ff5a1f";
-    ctx.font = "800 20px Inter, Arial, sans-serif";
-    ctx.fillText(section.title, viewport.x + 82, sectionY + 48);
-    ctx.fillStyle = "#211b17";
-    ctx.font = "600 22px Inter, Arial, sans-serif";
-    section.items.slice(0, 4).forEach((item, itemIndex) => {
-      ctx.fillText(`• ${item}`, viewport.x + 82, sectionY + 92 + itemIndex * 38);
-    });
-  });
-  ctx.restore();
-}
-
-function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, width: number, height: number, radius: number) {
-  const safeRadius = Math.min(radius, width / 2, height / 2);
-  ctx.beginPath();
-  ctx.moveTo(x + safeRadius, y);
-  ctx.lineTo(x + width - safeRadius, y);
-  ctx.quadraticCurveTo(x + width, y, x + width, y + safeRadius);
-  ctx.lineTo(x + width, y + height - safeRadius);
-  ctx.quadraticCurveTo(x + width, y + height, x + width - safeRadius, y + height);
-  ctx.lineTo(x + safeRadius, y + height);
-  ctx.quadraticCurveTo(x, y + height, x, y + height - safeRadius);
-  ctx.lineTo(x, y + safeRadius);
-  ctx.quadraticCurveTo(x, y, x + safeRadius, y);
-  ctx.closePath();
-}
-
-function buildPageModel(title: string, baseUrl: string, description: string | null, siteMapMd: string | null): PageModel {
-  const map = siteMapMd ?? "";
-  return {
-    title,
-    baseUrl,
-    description: description ?? `Public product experience captured from ${baseUrl}.`,
-    headings: extractBulletsAfter(map, "Important visible sections", ["Hero section", "Product value", "Social proof", "Call to action"]),
-    pages: extractBulletsAfter(map, "Real pages discovered", [baseUrl]),
-    actions: extractBulletsAfter(map, "Clicks and calls to action to film", ["Scroll landing page", "Show primary CTA", "End on value proof"]),
-  };
-}
-
-function extractBulletsAfter(markdown: string, heading: string, fallback: string[]) {
-  const marker = `## ${heading}`;
-  const start = markdown.indexOf(marker);
-  if (start === -1) return fallback;
-  const rest = markdown.slice(start + marker.length).split("\n## ")[0] ?? "";
-  const items = rest
-    .split("\n")
-    .map((line) => line.replace(/^[-*]\s*/, "").trim())
-    .filter((line) => line.length > 0 && !line.startsWith("#"))
-    .map((line) => line.replace(/^https?:\/\//, "").slice(0, 72));
-  return items.length > 0 ? items : fallback;
-}
-
 function detectLoginUrlFromMap(siteMapMd: string | null) {
   const match = siteMapMd?.match(/Detected login page:\s*(https?:\/\/\S+)/i);
   return match?.[1]?.replace(/[).,]+$/, "") ?? null;
 }
 
-function sceneMotion(text: string): DemoMotion {
-  return /back up|scroll back|close/i.test(text) ? "up" : "down";
-}
-
-function wrapText(ctx: CanvasRenderingContext2D, text: string, x: number, y: number, maxWidth: number, lineHeight: number, maxLines: number) {
-  const words = text.split(/\s+/).filter(Boolean);
-  let line = "";
-  let lines = 0;
-
-  for (const word of words) {
-    const testLine = line ? `${line} ${word}` : word;
-    if (ctx.measureText(testLine).width > maxWidth && line) {
-      ctx.fillText(line, x, y + lines * lineHeight);
-      line = word;
-      lines += 1;
-      if (lines >= maxLines) return;
-    } else {
-      line = testLine;
-    }
-  }
-
-  if (line && lines < maxLines) ctx.fillText(line, x, y + lines * lineHeight);
-}
-
-function easeInOut(value: number) {
-  return value < 0.5 ? 2 * value * value : 1 - Math.pow(-2 * value + 2, 2) / 2;
+function starterMap(name: string, baseUrl: string) {
+  return `# ${name} — product map\n\nBase URL: ${baseUrl}\n\n## Real pages discovered\n- ${baseUrl}\n\n## Important visible sections\n- Hero\n- Product value\n- Call to action\n\n## Clicks and calls to action to film\n- Scroll the landing page\n- Highlight primary CTA\n- End on value proof\n`;
 }
 
 function defaultFeaturePrompt(name: string) {
-  return `Show the main ${name} product experience from the homepage, including the clearest call to action and final value screen.`;
-}
-
-function starterMap(name: string, baseUrl: string) {
-  return `# ${name} product map
-
-Base URL: ${baseUrl}
-
-## Pages
-- Home / dashboard
-- Sign in
-- Main product workspace
-- Feature result or export page
-
-## Primary demo flow
-1. Open the product and establish the problem.
-2. Sign in if needed.
-3. Navigate to the feature that should be demonstrated.
-4. Perform the real clicks a founder would take.
-5. Show the final outcome clearly.
-
-## Notes for the filming agent
-- Keep the final edit under 69 seconds.
-- Avoid fake data unless it already exists in the product.
-- Prefer the most visual proof screen as the ending shot.
-`;
+  return `Show how a new user experiences ${name}: land on the site, scroll the value props, and end on the main call to action.`;
 }

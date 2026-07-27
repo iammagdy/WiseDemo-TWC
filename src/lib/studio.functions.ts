@@ -1,9 +1,44 @@
-import { createCipheriv, createHash, randomBytes } from "crypto";
+import { createCipheriv, createDecipheriv, createHash, randomBytes } from "crypto";
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { normalizePublicUrl, scanWebsite } from "./studio-scanner.server";
+import {
+  createSteelSession,
+  planScenes,
+  releaseSteelSession,
+  runScenesOverCdp,
+  type DecryptedCredentials,
+} from "./steel-recorder.server";
+
+function deriveCredsKey(): Buffer {
+  const keySecret = process.env.DEMOFORGE_CREDS_KEY;
+  if (!keySecret || keySecret.length < 32) {
+    throw new Error("Credential encryption is not configured yet.");
+  }
+  return /^[\da-f]{64}$/i.test(keySecret)
+    ? Buffer.from(keySecret, "hex")
+    : createHash("sha256").update(keySecret, "utf8").digest();
+}
+
+function decryptCredentials(ciphertext: string): DecryptedCredentials {
+  try {
+    const [ivB64, tagB64, dataB64] = ciphertext.split(".");
+    if (!ivB64 || !tagB64 || !dataB64) return null;
+    const key = deriveCredsKey();
+    const decipher = createDecipheriv("aes-256-gcm", key, Buffer.from(ivB64, "base64"));
+    decipher.setAuthTag(Buffer.from(tagB64, "base64"));
+    const plaintext = Buffer.concat([
+      decipher.update(Buffer.from(dataB64, "base64")),
+      decipher.final(),
+    ]).toString("utf8");
+    const parsed = JSON.parse(plaintext) as DecryptedCredentials;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
 
 export const createProject = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
@@ -64,7 +99,7 @@ export const getProjectWorkspace = createServerFn({ method: "GET" })
 
     const { data: demos, error: demosError } = await context.supabase
       .from("demos")
-      .select("id, title, feature_prompt, scene_script, status, progress_pct, current_step, mp4_url, thumbnail_url, duration_seconds, created_at")
+      .select("id, title, feature_prompt, scene_script, status, progress_pct, current_step, mp4_url, thumbnail_url, duration_seconds, steel_session_id, live_view_url, session_viewer_url, recording_url, error_message, created_at")
       .eq("project_id", data.projectId)
       .order("created_at", { ascending: false });
 
@@ -207,13 +242,7 @@ export const saveProjectCredential = createServerFn({ method: "POST" })
       throw new Error("Enter a valid login URL.");
     }
 
-    const keySecret = process.env.DEMOFORGE_CREDS_KEY;
-    if (!keySecret || keySecret.length < 32) {
-      throw new Error("Credential encryption is not configured yet.");
-    }
-    const key = /^[\da-f]{64}$/i.test(keySecret)
-      ? Buffer.from(keySecret, "hex")
-      : createHash("sha256").update(keySecret, "utf8").digest();
+    const key = deriveCredsKey();
     const iv = randomBytes(12);
     const cipher = createCipheriv("aes-256-gcm", key, iv);
     const encrypted = Buffer.concat([
@@ -289,30 +318,34 @@ export const createDemoJob = createServerFn({ method: "POST" })
       project = scannedProject;
     }
 
-    const { data: credentialMeta } = await context.supabase
+    const { data: credentialRow } = await context.supabase
       .from("project_credentials")
-      .select("kind, login_url")
+      .select("kind, login_url, ciphertext")
       .eq("project_id", data.projectId)
       .eq("owner_id", context.userId)
       .maybeSingle();
 
-    const hasCredentials = credentialMeta?.kind === "password" && Boolean(credentialMeta.login_url);
+    const decrypted =
+      credentialRow?.kind === "password" && credentialRow.ciphertext
+        ? decryptCredentials(credentialRow.ciphertext)
+        : null;
 
-    const sceneScript = hasCredentials
-      ? [
-          { seconds: "0-5", shot: `Open ${project.name} at the detected sign-in page: ${credentialMeta.login_url}.` },
-          { seconds: "5-12", shot: "Sign in with the saved credentials and wait for the real product workspace to load." },
-          { seconds: "12-32", shot: `Run the requested product flow: ${data.featurePrompt}` },
-          { seconds: "32-45", shot: "Close on the clearest result, export, dashboard, or proof screen." },
-        ]
-      : [
-          { seconds: "0-5", shot: `Open ${project.name} at the public landing page and establish what the product is.` },
-          { seconds: "5-16", shot: "Scroll down through the landing page to show sections, calls to action, and product proof." },
-          { seconds: "16-25", shot: `Spotlight the requested public demo angle: ${data.featurePrompt}` },
-          { seconds: "25-34", shot: "Scroll back up and close on the main call to action without inventing private app screens." },
-        ];
+    const plan = planScenes({
+      baseUrl: project.base_url,
+      loginUrl: credentialRow?.login_url ?? null,
+      credentials: decrypted,
+      featurePrompt: data.featurePrompt,
+      siteMapMd: project.site_map_md,
+    });
 
-    const { data: demo, error } = await context.supabase
+    const sceneScript = plan.actions.map((action, index) => ({
+      seconds: `${index * 4}-${(index + 1) * 4}`,
+      shot: plan.narration[index] ?? `Action: ${action.type}`,
+      action,
+    }));
+
+    // Insert demo row in "starting" state
+    const { data: demo, error: insertError } = await context.supabase
       .from("demos")
       .insert({
         project_id: data.projectId,
@@ -320,17 +353,120 @@ export const createDemoJob = createServerFn({ method: "POST" })
         title: data.title,
         feature_prompt: data.featurePrompt,
         scene_script: sceneScript,
-        status: "ready",
-        progress_pct: 100,
-        current_step: hasCredentials
-          ? "Ready — render a credential-assisted browser-capture demo."
-          : "Ready — render a public landing-page scroll demo.",
+        status: "starting",
+        progress_pct: 5,
+        current_step: "Booting real cloud browser on Steel.dev\u2026",
         thumbnail_url: `/api/public/screenshot?url=${encodeURIComponent(project.base_url)}&width=1280`,
-        duration_seconds: hasCredentials ? 45 : 34,
       })
-      .select("id, title, feature_prompt, scene_script, status, progress_pct, current_step, mp4_url, thumbnail_url, duration_seconds, created_at")
+      .select("id, title, feature_prompt, scene_script, status, progress_pct, current_step, mp4_url, thumbnail_url, duration_seconds, steel_session_id, live_view_url, session_viewer_url, recording_url, error_message, created_at")
       .single();
 
+    if (insertError) throw new Error(insertError.message);
+
+    // Create Steel session synchronously so we can return the live URL fast
+    try {
+      const session = await createSteelSession(project.base_url);
+
+      await context.supabase
+        .from("demos")
+        .update({
+          status: "recording",
+          progress_pct: 25,
+          current_step: "Real browser session live \u2014 driving the site\u2026",
+          steel_session_id: session.id,
+          live_view_url: session.liveViewUrl ?? session.debugUrl ?? null,
+          session_viewer_url: session.sessionViewerUrl ?? null,
+        })
+        .eq("id", demo.id);
+
+      return {
+        ...demo,
+        status: "recording" as const,
+        progress_pct: 25,
+        current_step: "Real browser session live \u2014 driving the site\u2026",
+        steel_session_id: session.id,
+        live_view_url: session.liveViewUrl ?? session.debugUrl ?? null,
+        session_viewer_url: session.sessionViewerUrl ?? null,
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to start Steel session.";
+      await context.supabase
+        .from("demos")
+        .update({ status: "failed", progress_pct: 0, current_step: message, error_message: message })
+        .eq("id", demo.id);
+      throw new Error(message);
+    }
+  });
+
+// Drive the Steel session with the planned actions, then release it.
+// Called from the client after createDemoJob returns, so we don't block the
+// initial response on a long CDP run.
+export const runDemoScenes = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((data) => z.object({ demoId: z.string().uuid() }).parse(data))
+  .handler(async ({ data, context }) => {
+    const { data: demo, error } = await context.supabase
+      .from("demos")
+      .select("id, steel_session_id, scene_script, project_id")
+      .eq("id", data.demoId)
+      .eq("owner_id", context.userId)
+      .maybeSingle();
+
     if (error) throw new Error(error.message);
+    if (!demo || !demo.steel_session_id) throw new Error("No active Steel session for this demo.");
+
+    const session = await (
+      await import("./steel-recorder.server")
+    ).getSteelSession(demo.steel_session_id);
+    const websocketUrl =
+      session && typeof session.websocketUrl === "string" ? session.websocketUrl : null;
+
+    let result: { executed: number; error?: string } = { executed: 0 };
+    if (websocketUrl) {
+      const script = Array.isArray(demo.scene_script) ? demo.scene_script : [];
+      const actions = script
+        .map((s) => (typeof s === "object" && s !== null ? (s as Record<string, unknown>).action : null))
+        .filter((a): a is Parameters<typeof runScenesOverCdp>[1][number] => Boolean(a));
+      result = await runScenesOverCdp(websocketUrl, actions);
+    }
+
+    // Release session; grab replay URL
+    const released = await releaseSteelSession(demo.steel_session_id);
+
+    const status = result.error && result.executed === 0 ? "failed" : "ready";
+    const currentStep = result.error
+      ? `Finished with warnings: ${result.error}`
+      : "Recording complete \u2014 replay ready.";
+
+    const { data: updated } = await context.supabase
+      .from("demos")
+      .update({
+        status,
+        progress_pct: 100,
+        current_step: currentStep,
+        session_viewer_url: released?.sessionViewerUrl ?? null,
+        live_view_url: released?.liveViewUrl ?? null,
+        recording_url: released?.sessionViewerUrl ?? null,
+        error_message: result.error && result.executed === 0 ? result.error : null,
+      })
+      .eq("id", demo.id)
+      .select("id, status, progress_pct, current_step, session_viewer_url, live_view_url, recording_url, error_message")
+      .single();
+
+    return updated;
+  });
+
+export const getDemoStatus = createServerFn({ method: "GET" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((data) => z.object({ demoId: z.string().uuid() }).parse(data))
+  .handler(async ({ data, context }) => {
+    const { data: demo, error } = await context.supabase
+      .from("demos")
+      .select("id, status, progress_pct, current_step, steel_session_id, live_view_url, session_viewer_url, recording_url, error_message")
+      .eq("id", data.demoId)
+      .eq("owner_id", context.userId)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    if (!demo) throw new Error("Demo not found.");
     return demo;
   });
