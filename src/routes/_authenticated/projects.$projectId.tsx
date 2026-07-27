@@ -1,14 +1,16 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
-import { ArrowLeft, Download, ExternalLink, Film, KeyRound, Loader2, Map, Play, RefreshCw, Save, Sparkles, Wand2 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { ArrowLeft, ExternalLink, Film, KeyRound, Loader2, Map, Play, RefreshCw, Save, Sparkles } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import {
   createDemoJob,
+  getDemoStatus,
   getProjectWorkspace,
+  runDemoScenes,
   scanProjectSite,
   saveProjectCredential,
   saveProjectMap,
@@ -30,11 +32,6 @@ export const Route = createFileRoute("/_authenticated/projects/$projectId")({
 
 type Workspace = Awaited<ReturnType<typeof getProjectWorkspace>>;
 type Demo = Workspace["demos"][number];
-type RenderedVideo = {
-  url: string;
-  blob: Blob;
-  mimeType: string;
-};
 
 function ProjectStudio() {
   const { projectId } = Route.useParams();
@@ -43,6 +40,8 @@ function ProjectStudio() {
   const saveCredential = useServerFn(saveProjectCredential);
   const createDemo = useServerFn(createDemoJob);
   const scanSite = useServerFn(scanProjectSite);
+  const runScenes = useServerFn(runDemoScenes);
+  const fetchDemoStatus = useServerFn(getDemoStatus);
 
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
   const [loading, setLoading] = useState(true);
@@ -55,9 +54,8 @@ function ProjectStudio() {
   const [demoTitle, setDemoTitle] = useState("");
   const [featurePrompt, setFeaturePrompt] = useState("");
   const [busyAction, setBusyAction] = useState<"map" | "creds" | "demo" | "scan" | null>(null);
-  const [renderingDemoId, setRenderingDemoId] = useState<string | null>(null);
-  const [renderedVideos, setRenderedVideos] = useState<Record<string, RenderedVideo>>({});
   const [notice, setNotice] = useState<string | null>(null);
+  const pollingRef = useRef<Set<string>>(new Set());
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -152,8 +150,24 @@ function ProjectStudio() {
     try {
       const demo = await createDemo({ data: { projectId, title: demoTitle, featurePrompt } });
       setWorkspace((current) => (current ? { ...current, demos: [demo, ...current.demos] } : current));
-      setNotice("Demo script created. Rendering real browser-capture video…");
-      await handleRenderDemo(demo);
+      setNotice("Real cloud browser launched. Watch it drive your site live below.");
+      // Kick off scene execution in the background, then poll
+      void runScenes({ data: { demoId: demo.id } })
+        .then((result) => {
+          setWorkspace((current) => {
+            if (!current) return current;
+            return {
+              ...current,
+              demos: current.demos.map((d) =>
+                d.id === demo.id ? { ...d, ...result } : d,
+              ),
+            };
+          });
+        })
+        .catch((err: unknown) => {
+          setError(err instanceof Error ? err.message : "Recording finished with an error.");
+        });
+      startPolling(demo.id);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Could not queue the demo.");
     } finally {
@@ -161,21 +175,45 @@ function ProjectStudio() {
     }
   }
 
-  async function handleRenderDemo(demo: Demo) {
-    if (!workspace?.project) return;
-    setRenderingDemoId(demo.id);
-    setNotice(null);
-    setError(null);
-    try {
-      const video = await renderDemoVideo({ project: workspace.project, demo });
-      setRenderedVideos((current) => ({ ...current, [demo.id]: video }));
-      setNotice("Real demo video rendered. Download it from the demo queue.");
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Could not render the browser-capture video.");
-    } finally {
-      setRenderingDemoId(null);
+  const startPolling = useCallback(
+    (demoId: string) => {
+      if (pollingRef.current.has(demoId)) return;
+      pollingRef.current.add(demoId);
+      const tick = async () => {
+        try {
+          const status = await fetchDemoStatus({ data: { demoId } });
+          setWorkspace((current) => {
+            if (!current) return current;
+            return {
+              ...current,
+              demos: current.demos.map((d) =>
+                d.id === demoId ? { ...d, ...status } : d,
+              ),
+            };
+          });
+          if (status.status === "ready" || status.status === "failed") {
+            pollingRef.current.delete(demoId);
+            return;
+          }
+        } catch {
+          /* ignore transient errors */
+        }
+        setTimeout(tick, 3000);
+      };
+      setTimeout(tick, 2500);
+    },
+    [fetchDemoStatus],
+  );
+
+  // Resume polling for any in-flight demos when workspace loads
+  useEffect(() => {
+    if (!workspace) return;
+    for (const demo of workspace.demos) {
+      if (demo.status === "starting" || demo.status === "recording") {
+        startPolling(demo.id);
+      }
     }
-  }
+  }, [startPolling, workspace]);
 
   return (
     <div className="min-h-screen bg-background text-foreground">
