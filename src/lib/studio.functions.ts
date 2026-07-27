@@ -421,7 +421,7 @@ export const runDemoScenes = createServerFn({ method: "POST" })
     const websocketUrl =
       session && typeof session.websocketUrl === "string" ? session.websocketUrl : null;
 
-    let result = { executed: 0, error: undefined as string | undefined };
+    let result: { executed: number; error?: string } = { executed: 0 };
     if (websocketUrl) {
       const script = Array.isArray(demo.scene_script) ? demo.scene_script : [];
       const actions = script
