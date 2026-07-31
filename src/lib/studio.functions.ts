@@ -2,7 +2,6 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes } from "crypt
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 
-import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { normalizePublicUrl, scanWebsite } from "./studio-scanner.server";
 import {
   createSteelSession,
@@ -42,7 +41,17 @@ function decryptCredentials(ciphertext: string): DecryptedCredentials {
   }
 }
 
-type SupabaseCtx = { supabase: { from: (table: string) => any } };
+type SupabaseCtx = { supabase: { from: (table: string) => any }; userId: string };
+
+// Authentication was removed for the experimental stage: every visitor works in
+// one shared workspace, and all database access goes through the service-role
+// client inside server functions (the tables stay unreachable from the browser).
+export const SHARED_WORKSPACE_OWNER = "00000000-0000-0000-0000-000000000001";
+
+async function workspaceContext(): Promise<SupabaseCtx> {
+  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+  return { supabase: supabaseAdmin as unknown as SupabaseCtx["supabase"], userId: SHARED_WORKSPACE_OWNER };
+}
 
 async function loadCredentials(
   context: SupabaseCtx,
@@ -62,7 +71,6 @@ async function loadCredentials(
 }
 
 export const createProject = createServerFn({ method: "POST" })
-  .middleware([requireSupabaseAuth])
   .inputValidator((data) =>
     z
       .object({
@@ -71,7 +79,8 @@ export const createProject = createServerFn({ method: "POST" })
       })
       .parse(data),
   )
-  .handler(async ({ data, context }) => {
+  .handler(async ({ data }) => {
+    const context = await workspaceContext();
     let baseUrl: string;
     try {
       baseUrl = normalizePublicUrl(data.baseUrl);
@@ -100,7 +109,6 @@ export const createProject = createServerFn({ method: "POST" })
   });
 
 export const getProjectWorkspace = createServerFn({ method: "GET" })
-  .middleware([requireSupabaseAuth])
   .inputValidator((data) =>
     z
       .object({
@@ -108,7 +116,8 @@ export const getProjectWorkspace = createServerFn({ method: "GET" })
       })
       .parse(data),
   )
-  .handler(async ({ data, context }) => {
+  .handler(async ({ data }) => {
+    const context = await workspaceContext();
     const { data: project, error: projectError } = await context.supabase
       .from("projects")
       .select("id, name, base_url, description, site_map_md, site_map_source, site_map_updated_at, created_at")
@@ -150,7 +159,6 @@ export const getProjectWorkspace = createServerFn({ method: "GET" })
   });
 
 export const scanProjectSite = createServerFn({ method: "POST" })
-  .middleware([requireSupabaseAuth])
   .inputValidator((data) =>
     z
       .object({
@@ -158,7 +166,8 @@ export const scanProjectSite = createServerFn({ method: "POST" })
       })
       .parse(data),
   )
-  .handler(async ({ data, context }) => {
+  .handler(async ({ data }) => {
+    const context = await workspaceContext();
     const { data: existing, error: existingError } = await context.supabase
       .from("projects")
       .select("id, name, base_url")
@@ -222,7 +231,6 @@ export const scanProjectSite = createServerFn({ method: "POST" })
   });
 
 export const saveProjectMap = createServerFn({ method: "POST" })
-  .middleware([requireSupabaseAuth])
   .inputValidator((data) =>
     z
       .object({
@@ -232,7 +240,8 @@ export const saveProjectMap = createServerFn({ method: "POST" })
       })
       .parse(data),
   )
-  .handler(async ({ data, context }) => {
+  .handler(async ({ data }) => {
+    const context = await workspaceContext();
     const { data: project, error } = await context.supabase
       .from("projects")
       .update({
@@ -251,7 +260,6 @@ export const saveProjectMap = createServerFn({ method: "POST" })
   });
 
 export const saveProjectCredential = createServerFn({ method: "POST" })
-  .middleware([requireSupabaseAuth])
   .inputValidator((data) =>
     z
       .object({
@@ -263,7 +271,8 @@ export const saveProjectCredential = createServerFn({ method: "POST" })
       })
       .parse(data),
   )
-  .handler(async ({ data, context }) => {
+  .handler(async ({ data }) => {
+    const context = await workspaceContext();
     const { data: project, error: projectError } = await context.supabase
       .from("projects")
       .select("id")
@@ -333,7 +342,6 @@ export const saveProjectCredential = createServerFn({ method: "POST" })
   });
 
 export const createDemoJob = createServerFn({ method: "POST" })
-  .middleware([requireSupabaseAuth])
   .inputValidator((data) =>
     z
       .object({
@@ -343,7 +351,8 @@ export const createDemoJob = createServerFn({ method: "POST" })
       })
       .parse(data),
   )
-  .handler(async ({ data, context }) => {
+  .handler(async ({ data }) => {
+    const context = await workspaceContext();
     let { data: project, error: projectError } = await context.supabase
       .from("projects")
       .select("id, name, base_url, description, site_map_md")
@@ -430,9 +439,9 @@ export const createDemoJob = createServerFn({ method: "POST" })
 // Recon the product with the live browser, let the AI write the shot list,
 // drive it for real, then release the session so Steel finalizes the video.
 export const runDemoScenes = createServerFn({ method: "POST" })
-  .middleware([requireSupabaseAuth])
   .inputValidator((data) => z.object({ demoId: z.string().uuid() }).parse(data))
-  .handler(async ({ data, context }) => {
+  .handler(async ({ data }) => {
+    const context = await workspaceContext();
     const { data: demo, error } = await context.supabase
       .from("demos")
       .select("id, steel_session_id, feature_prompt, project_id")
@@ -556,9 +565,9 @@ export const runDemoScenes = createServerFn({ method: "POST" })
 // Pull the finalized MP4 out of Steel, store it in Cloud storage, and expose a
 // long-lived signed URL the browser can play and download.
 export const finalizeDemoRecording = createServerFn({ method: "POST" })
-  .middleware([requireSupabaseAuth])
   .inputValidator((data) => z.object({ demoId: z.string().uuid() }).parse(data))
-  .handler(async ({ data, context }) => {
+  .handler(async ({ data }) => {
+    const context = await workspaceContext();
     const { data: demo, error } = await context.supabase
       .from("demos")
       .select("id, steel_session_id, project_id")
@@ -611,9 +620,9 @@ export const finalizeDemoRecording = createServerFn({ method: "POST" })
   });
 
 export const getDemoStatus = createServerFn({ method: "GET" })
-  .middleware([requireSupabaseAuth])
   .inputValidator((data) => z.object({ demoId: z.string().uuid() }).parse(data))
-  .handler(async ({ data, context }) => {
+  .handler(async ({ data }) => {
+    const context = await workspaceContext();
     const { data: demo, error } = await context.supabase
       .from("demos")
       .select("id, status, progress_pct, current_step, steel_session_id, live_view_url, session_viewer_url, mp4_url, recording_url, duration_seconds, error_message")
