@@ -1,6 +1,6 @@
 import { defineTool } from "@lovable.dev/mcp-js";
 import { z } from "zod";
-import { notAuthenticated, supabaseForUser } from "../supabase";
+import { supabaseWorkspace } from "../supabase";
 
 export default defineTool({
   name: "get_project",
@@ -9,9 +9,8 @@ export default defineTool({
     "Get one DemoForge project including its AI-generated product/site map markdown and its recorded demos.",
   inputSchema: { project_id: z.string().uuid().describe("The project id from list_projects.") },
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
-  handler: async ({ project_id }, ctx) => {
-    if (!ctx.isAuthenticated()) return notAuthenticated();
-    const supabase = supabaseForUser(ctx);
+  handler: async ({ project_id }) => {
+    const supabase = supabaseWorkspace();
     const { data: project, error } = await supabase
       .from("projects")
       .select("id, name, base_url, description, site_map_md, site_map_source, site_map_updated_at, created_at")

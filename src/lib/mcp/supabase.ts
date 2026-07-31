@@ -1,5 +1,4 @@
 import { createClient } from "@supabase/supabase-js";
-import type { ToolContext } from "@lovable.dev/mcp-js";
 
 type RuntimeGlobals = typeof globalThis & {
   Deno?: { env?: { get?: (name: string) => string | undefined } };
@@ -48,19 +47,17 @@ function supabasePublishableKey(): string {
   throw new Error("SUPABASE_PUBLISHABLE_KEY, SUPABASE_PUBLISHABLE_KEYS, or SUPABASE_ANON_KEY is required");
 }
 
-/** Forwards the verified bearer token so RLS runs as the signed-in user. */
-export function supabaseForUser(ctx: ToolContext) {
-  const token = ctx.getToken();
-  if (!token) throw new Error("supabaseForUser requires a verified OAuth token");
-  return createClient(supabaseProjectUrl(), supabasePublishableKey(), {
-    global: { headers: { Authorization: `Bearer ${token}` } },
-    auth: { persistSession: false, autoRefreshToken: false },
-  });
+function supabaseServiceKey(): string | undefined {
+  return configuredEnv(["SUPABASE_SERVICE_ROLE_KEY"]);
 }
 
-export function notAuthenticated() {
-  return {
-    content: [{ type: "text" as const, text: "Not authenticated. Reconnect this MCP server and sign in." }],
-    isError: true,
-  };
+/**
+ * Authentication was removed for the experimental stage: the MCP server reads
+ * and writes the same open, shared workspace the web app uses.
+ */
+export function supabaseWorkspace() {
+  const serviceKey = supabaseServiceKey();
+  return createClient(supabaseProjectUrl(), serviceKey ?? supabasePublishableKey(), {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
 }

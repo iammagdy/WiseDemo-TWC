@@ -1,11 +1,9 @@
-import { auth, defineMcp } from "@lovable.dev/mcp-js";
+import { defineMcp } from "@lovable.dev/mcp-js";
 
 import getProjectTool from "./tools/get-project";
 import listDemosTool from "./tools/list-demos";
 import listProjectsTool from "./tools/list-projects";
 import updateProjectMapTool from "./tools/update-project-map";
-
-const projectRef = import.meta.env.VITE_SUPABASE_PROJECT_ID ?? "project-ref-unset";
 
 export default defineMcp({
   name: "founder-s-demo-genie",
