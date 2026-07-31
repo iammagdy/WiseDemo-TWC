@@ -3,11 +3,7 @@
   "sdk_version": "0.26.1",
   "path": "/mcp",
   "auth": {
-    "type": "oauth",
-    "issuer": "https://dwccnayhbmbzvxsqcslo.supabase.co/auth/v1",
-    "accepted_audiences": [
-      "authenticated"
-    ]
+    "type": "none"
   },
   "mcp": {
     "server": {
@@ -19,7 +15,7 @@
       {
         "name": "list_projects",
         "title": "List demo projects",
-        "description": "List the signed-in user's DemoForge projects (name, website URL, description, last scan time).",
+        "description": "List the DemoForge projects (name, website URL, description, last scan time).",
         "annotations": {
           "readOnlyHint": true,
           "idempotentHint": true,
@@ -61,7 +57,7 @@
       {
         "name": "list_demos",
         "title": "List demo videos",
-        "description": "List the signed-in user's demo recordings with status, progress and playback URLs. Optionally filter by project.",
+        "description": "List the demo recordings with status, progress and playback URLs. Optionally filter by project.",
         "annotations": {
           "readOnlyHint": true,
           "idempotentHint": true,
