@@ -23,7 +23,7 @@ export function Landing() {
         <div className="mx-auto flex max-w-7xl items-center justify-between gap-3 px-4 py-3 sm:px-6 sm:py-4">
           <Link to="/" className="flex min-w-0 items-center gap-2">
             <Clapper className="h-6 w-6 shrink-0 text-primary" />
-            <span className="font-mono-tight text-base font-semibold tracking-tight sm:text-lg">DemoForge</span>
+            <span className="font-mono-tight text-base font-semibold tracking-tight sm:text-lg">WiseDemo</span>
             <span className="ml-1 hidden rounded-sm border border-border px-1.5 py-0.5 font-mono-tight text-[10px] uppercase text-muted-foreground sm:inline">
               REC
             </span>
@@ -67,7 +67,7 @@ export function Landing() {
               in 60&nbsp;seconds.
             </h1>
             <p className="mt-6 max-w-xl text-base leading-relaxed text-muted-foreground sm:text-lg">
-              Drop your URL. DemoForge maps your product, scripts the flow with AI, drives a real browser,
+              Drop your URL. WiseDemo maps your product, scripts the flow with AI, drives a real browser,
               and hands you a cinematic ≤60-second demo — ready for X, LinkedIn, and Product Hunt.
             </p>
 
@@ -124,7 +124,7 @@ export function Landing() {
               </div>
               <img
                 src={heroImage}
-                alt="DemoForge autonomous agent clicking a New Project button in a dark SaaS UI"
+                alt="WiseDemo autonomous agent clicking a New Project button in a dark SaaS UI"
                 width={1600}
                 height={900}
                 className="aspect-[16/10] w-full object-cover"
@@ -313,7 +313,7 @@ export function Landing() {
       </section>
 
       <footer className="border-t border-border py-8 text-center font-mono-tight text-xs uppercase tracking-widest text-muted-foreground">
-        © {new Date().getFullYear()} DemoForge Studios — All takes reserved.
+        © {new Date().getFullYear()} WiseDemo Studios — All takes reserved.
       </footer>
     </div>
   );

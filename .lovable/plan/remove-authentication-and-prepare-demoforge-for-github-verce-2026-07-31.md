@@ -1,4 +1,4 @@
-# Remove authentication and prepare DemoForge for GitHub / Vercel / Codex
+# Remove authentication and prepare WiseDemo for GitHub / Vercel / Codex
 
 Goal: anyone who opens the app can use every screen — no sign-in, no accounts — and the repo is ready to be edited and deployed outside Lovable.
 

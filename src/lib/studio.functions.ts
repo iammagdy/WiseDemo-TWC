@@ -16,7 +16,7 @@ import { outlineToMarkdown, reconSite, type ReconResult } from "./steel-recon.se
 import { planDemoScenes } from "./scene-planner.server";
 
 function deriveCredsKey(): Buffer {
-  const keySecret = process.env.DEMOFORGE_CREDS_KEY;
+  const keySecret = process.env.WISEDEMO_CREDS_KEY ?? process.env.DEMOFORGE_CREDS_KEY;
   if (!keySecret || keySecret.length < 32) {
     throw new Error("Credential encryption is not configured yet.");
   }

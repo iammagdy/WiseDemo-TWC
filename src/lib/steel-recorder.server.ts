@@ -22,7 +22,7 @@ function requireSteelKey(): string {
   const key = process.env.STEEL_API_KEY;
   if (!key || key.length < 8) {
     throw new Error(
-      "Steel API key not configured. Sign up at steel.dev (free, no card), copy the API key, and paste it in DemoForge secrets.",
+      "Steel API key not configured. Sign up at steel.dev (free, no card), copy the API key, and paste it in WiseDemo secrets.",
     );
   }
   return key;

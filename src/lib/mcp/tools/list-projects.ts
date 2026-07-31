@@ -4,7 +4,7 @@ import { supabaseWorkspace } from "../supabase";
 export default defineTool({
   name: "list_projects",
   title: "List demo projects",
-  description: "List the DemoForge projects (name, website URL, description, last scan time).",
+  description: "List the WiseDemo projects (name, website URL, description, last scan time).",
   inputSchema: {},
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
   handler: async () => {

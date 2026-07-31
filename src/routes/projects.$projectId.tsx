@@ -20,10 +20,10 @@ import {
 export const Route = createFileRoute("/projects/$projectId")({
   head: () => ({
     meta: [
-      { title: "Project Studio — DemoForge" },
-      { name: "description", content: "Map a SaaS product, add secure access, and queue real browser demo recordings in DemoForge." },
-      { property: "og:title", content: "Project Studio — DemoForge" },
-      { property: "og:description", content: "Map a SaaS product, add secure access, and queue real browser demo recordings in DemoForge." },
+      { title: "Project Studio — WiseDemo" },
+      { name: "description", content: "Map a SaaS product, add secure access, and queue real browser demo recordings in WiseDemo." },
+      { property: "og:title", content: "Project Studio — WiseDemo" },
+      { property: "og:description", content: "Map a SaaS product, add secure access, and queue real browser demo recordings in WiseDemo." },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },
     ],
