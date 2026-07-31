@@ -4,6 +4,9 @@ import { supabase } from "@/integrations/supabase/client";
 import { lovable } from "@/integrations/lovable";
 
 export const Route = createFileRoute("/auth")({
+  validateSearch: (s: Record<string, unknown>) => ({
+    next: typeof s.next === "string" && s.next.startsWith("/") && !s.next.startsWith("//") ? s.next : undefined,
+  }),
   head: () => ({
     meta: [
       { title: "Sign in — DemoForge" },
@@ -19,6 +22,7 @@ export const Route = createFileRoute("/auth")({
 
 function AuthPage() {
   const navigate = useNavigate();
+  const { next } = Route.useSearch();
   const [mode, setMode] = useState<"signin" | "signup">("signin");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -27,23 +31,27 @@ function AuthPage() {
 
   useEffect(() => {
     let alive = true;
+    const go = () => {
+      if (next) window.location.replace(next);
+      else navigate({ to: "/dashboard", replace: true });
+    };
     // 1) If already signed in, jump straight in.
     supabase.auth.getSession().then(({ data }) => {
-      if (alive && data.session) navigate({ to: "/dashboard", replace: true });
+      if (alive && data.session) go();
     });
     // 2) Also react when the OAuth popup finishes and sets the session
     //    after signInWithOAuth has already returned.
     const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
       if (!alive) return;
       if ((event === "SIGNED_IN" || event === "INITIAL_SESSION") && session) {
-        navigate({ to: "/dashboard", replace: true });
+        go();
       }
     });
     return () => {
       alive = false;
       sub.subscription.unsubscribe();
     };
-  }, [navigate]);
+  }, [navigate, next]);
 
   async function handleEmail(e: React.FormEvent) {
     e.preventDefault();
@@ -54,14 +62,15 @@ function AuthPage() {
         const { error } = await supabase.auth.signUp({
           email,
           password,
-          options: { emailRedirectTo: `${window.location.origin}/dashboard` },
+          options: { emailRedirectTo: `${window.location.origin}${next ?? "/dashboard"}` },
         });
         if (error) throw error;
       } else {
         const { error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) throw error;
       }
-      navigate({ to: "/dashboard", replace: true });
+      if (next) window.location.replace(next);
+      else navigate({ to: "/dashboard", replace: true });
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Something went wrong");
     } finally {
@@ -73,14 +82,15 @@ function AuthPage() {
     setError(null);
     try {
       const result = await lovable.auth.signInWithOAuth("google", {
-        redirect_uri: window.location.origin,
+        redirect_uri: next ? `${window.location.origin}${next}` : window.location.origin,
       });
       if (result.error) {
         setError(result.error.message ?? "Google sign-in failed");
         return;
       }
       if (result.redirected) return;
-      navigate({ to: "/dashboard", replace: true });
+      if (next) window.location.replace(next);
+      else navigate({ to: "/dashboard", replace: true });
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Google sign-in failed");
     }
