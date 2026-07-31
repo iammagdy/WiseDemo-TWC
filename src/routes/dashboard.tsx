@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { createProject } from "@/lib/studio.functions";
 import { supabase } from "@/integrations/supabase/client";
 
-export const Route = createFileRoute("/_authenticated/dashboard")({
+export const Route = createFileRoute("/dashboard")({
   head: () => ({
     meta: [
       { title: "Dashboard — DemoForge" },
