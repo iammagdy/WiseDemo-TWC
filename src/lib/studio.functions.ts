@@ -105,8 +105,72 @@ export const createProject = createServerFn({ method: "POST" })
       .single();
 
     if (error) throw new Error(error.message);
+    return project as {
+      id: string;
+      name: string;
+      base_url: string;
+      description: string | null;
+      site_map_md: string | null;
+      site_map_updated_at: string | null;
+      created_at: string;
+    };
+  });
+
+export type ProjectListItem = {
+  id: string;
+  name: string;
+  base_url: string;
+  created_at: string;
+};
+
+export const listProjects = createServerFn({ method: "GET" }).handler(async () => {
+  const context = await workspaceContext();
+  const { data, error } = await context.supabase
+    .from("projects")
+    .select("id, name, base_url, created_at")
+    .order("created_at", { ascending: false });
+  if (error) throw new Error(error.message);
+  return (data ?? []) as ProjectListItem[];
+});
+
+const legacyCreateProject = createServerFn({ method: "POST" })
+  .inputValidator((data) =>
+    z
+      .object({
+        name: z.string().trim().min(2).max(80),
+        baseUrl: z.string().trim().min(3).max(300),
+      })
+      .parse(data),
+  )
+  .handler(async ({ data }) => {
+    const context = await workspaceContext();
+    let baseUrl: string;
+    try {
+      baseUrl = normalizePublicUrl(data.baseUrl);
+    } catch {
+      throw new Error("Enter a valid website URL.");
+    }
+
+    const scan = await scanWebsite(baseUrl, data.name);
+
+    const { data: project, error } = await context.supabase
+      .from("projects")
+      .insert({
+        owner_id: context.userId,
+        name: data.name,
+        base_url: baseUrl,
+        description: scan.description,
+        site_map_md: scan.siteMapMd,
+        site_map_source: "manual",
+        site_map_updated_at: new Date().toISOString(),
+      })
+      .select("id, name, base_url, description, site_map_md, site_map_updated_at, created_at")
+      .single();
+
+    if (error) throw new Error(error.message);
     return project;
   });
+void legacyCreateProject;
 
 export const getProjectWorkspace = createServerFn({ method: "GET" })
   .inputValidator((data) =>
