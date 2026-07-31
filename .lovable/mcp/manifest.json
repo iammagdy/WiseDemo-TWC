@@ -1,0 +1,125 @@
+{
+  "version": 1,
+  "sdk_version": "0.26.1",
+  "path": "/mcp",
+  "auth": {
+    "type": "oauth",
+    "issuer": "https://dwccnayhbmbzvxsqcslo.supabase.co/auth/v1",
+    "accepted_audiences": [
+      "authenticated"
+    ]
+  },
+  "mcp": {
+    "server": {
+      "name": "founder-s-demo-genie",
+      "version": "0.1.0",
+      "title": "Founder's Demo Genie"
+    },
+    "tools": [
+      {
+        "name": "list_projects",
+        "title": "List demo projects",
+        "description": "List the signed-in user's DemoForge projects (name, website URL, description, last scan time).",
+        "annotations": {
+          "readOnlyHint": true,
+          "idempotentHint": true,
+          "openWorldHint": false
+        },
+        "inputSchema": {
+          "$schema": "http://json-schema.org/draft-07/schema#",
+          "type": "object",
+          "properties": {}
+        },
+        "outputSchema": null
+      },
+      {
+        "name": "get_project",
+        "title": "Get project details",
+        "description": "Get one DemoForge project including its AI-generated product/site map markdown and its recorded demos.",
+        "annotations": {
+          "readOnlyHint": true,
+          "idempotentHint": true,
+          "openWorldHint": false
+        },
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "project_id": {
+              "type": "string",
+              "format": "uuid",
+              "description": "The project id from list_projects."
+            }
+          },
+          "required": [
+            "project_id"
+          ],
+          "additionalProperties": false,
+          "$schema": "http://json-schema.org/draft-07/schema#"
+        },
+        "outputSchema": null
+      },
+      {
+        "name": "list_demos",
+        "title": "List demo videos",
+        "description": "List the signed-in user's demo recordings with status, progress and playback URLs. Optionally filter by project.",
+        "annotations": {
+          "readOnlyHint": true,
+          "idempotentHint": true,
+          "openWorldHint": false
+        },
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "project_id": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Only return demos for this project."
+            },
+            "status": {
+              "type": "string",
+              "description": "Only return demos in this status, e.g. queued, recording, ready, failed."
+            }
+          },
+          "additionalProperties": false,
+          "$schema": "http://json-schema.org/draft-07/schema#"
+        },
+        "outputSchema": null
+      },
+      {
+        "name": "update_project_map",
+        "title": "Update project product map",
+        "description": "Replace a project's product/site map markdown (and optionally its description) so demo scripts use better context.",
+        "annotations": {
+          "readOnlyHint": false,
+          "destructiveHint": true,
+          "openWorldHint": false
+        },
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "project_id": {
+              "type": "string",
+              "format": "uuid",
+              "description": "The project id from list_projects."
+            },
+            "site_map_md": {
+              "type": "string",
+              "description": "Markdown product map: pages, features, flows, auth notes."
+            },
+            "description": {
+              "type": "string",
+              "description": "Short product description."
+            }
+          },
+          "required": [
+            "project_id",
+            "site_map_md"
+          ],
+          "additionalProperties": false,
+          "$schema": "http://json-schema.org/draft-07/schema#"
+        },
+        "outputSchema": null
+      }
+    ]
+  }
+}
