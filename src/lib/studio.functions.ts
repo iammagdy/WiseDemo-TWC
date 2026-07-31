@@ -123,6 +123,36 @@ export type ProjectListItem = {
   created_at: string;
 };
 
+export type ProjectRecord = {
+  id: string;
+  name: string;
+  base_url: string;
+  description: string | null;
+  site_map_md: string | null;
+  site_map_source: string | null;
+  site_map_updated_at: string | null;
+  created_at: string;
+};
+
+export type DemoRecord = {
+  id: string;
+  title: string;
+  feature_prompt: string;
+  scene_script: unknown;
+  status: string;
+  progress_pct: number;
+  current_step: string | null;
+  mp4_url: string | null;
+  thumbnail_url: string | null;
+  duration_seconds: number | null;
+  steel_session_id: string | null;
+  live_view_url: string | null;
+  session_viewer_url: string | null;
+  recording_url: string | null;
+  error_message: string | null;
+  created_at: string;
+};
+
 export const listProjects = createServerFn({ method: "GET" }).handler(async () => {
   const context = await workspaceContext();
   const { data, error } = await context.supabase
@@ -181,7 +211,11 @@ export const getProjectWorkspace = createServerFn({ method: "GET" })
       credentials = null;
     }
 
-    return { project, demos: demos ?? [], credentials };
+    return {
+      project: project as ProjectRecord,
+      demos: (demos ?? []) as DemoRecord[],
+      credentials,
+    };
   });
 
 export const scanProjectSite = createServerFn({ method: "POST" })
