@@ -1,12 +1,12 @@
 import { defineTool } from "@lovable.dev/mcp-js";
 import { z } from "zod";
-import { notAuthenticated, supabaseForUser } from "../supabase";
+import { supabaseWorkspace } from "../supabase";
 
 export default defineTool({
   name: "list_demos",
   title: "List demo videos",
   description:
-    "List the signed-in user's demo recordings with status, progress and playback URLs. Optionally filter by project.",
+    "List the demo recordings with status, progress and playback URLs. Optionally filter by project.",
   inputSchema: {
     project_id: z.string().uuid().optional().describe("Only return demos for this project."),
     status: z
@@ -15,9 +15,8 @@ export default defineTool({
       .describe("Only return demos in this status, e.g. queued, recording, ready, failed."),
   },
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
-  handler: async ({ project_id, status }, ctx) => {
-    if (!ctx.isAuthenticated()) return notAuthenticated();
-    const supabase = supabaseForUser(ctx);
+  handler: async ({ project_id, status }) => {
+    const supabase = supabaseWorkspace();
     let query = supabase
       .from("demos")
       .select(

@@ -34,11 +34,11 @@ export function Landing() {
             <a href="#pricing" className="hover:text-foreground">Pricing</a>
           </nav>
           <div className="flex shrink-0 items-center gap-2 sm:gap-3">
-            <Link to="/auth" className="hidden text-sm text-muted-foreground hover:text-foreground sm:inline">
-              Sign in
+            <Link to="/dashboard" className="hidden text-sm text-muted-foreground hover:text-foreground sm:inline">
+              Studio
             </Link>
             <Link
-              to="/auth"
+              to="/dashboard"
               className="rounded-md bg-primary px-3 py-2 text-xs font-medium text-primary-foreground shadow-[var(--shadow-glow)] transition hover:opacity-90 sm:px-3.5 sm:text-sm"
             >
               Start filming
@@ -74,7 +74,7 @@ export function Landing() {
             <form
               onSubmit={(e) => {
                 e.preventDefault();
-                window.location.href = `/auth?url=${encodeURIComponent(url)}`;
+                window.location.href = `/dashboard?url=${encodeURIComponent(url)}`;
               }}
               className="mt-8 flex w-full max-w-xl flex-wrap items-center gap-2 rounded-xl border border-border bg-card p-2 shadow-[var(--shadow-glow)] sm:flex-nowrap"
             >
@@ -278,7 +278,7 @@ export function Landing() {
                 ))}
               </ul>
               <Link
-                to="/auth"
+                to="/dashboard"
                 className={`mt-8 rounded-lg py-2.5 text-center text-sm font-medium transition ${
                   p.featured
                     ? "bg-primary text-primary-foreground hover:opacity-90"
@@ -303,7 +303,7 @@ export function Landing() {
             Three demos on the house. Ship one before your competitor books an editor.
           </p>
           <Link
-            to="/auth"
+            to="/dashboard"
             className="mt-8 inline-flex items-center gap-2 rounded-lg bg-primary px-6 py-3 text-sm font-medium text-primary-foreground shadow-[var(--shadow-glow)] transition hover:opacity-90"
           >
             <span className="h-1.5 w-1.5 rounded-full bg-primary-foreground animate-record" />

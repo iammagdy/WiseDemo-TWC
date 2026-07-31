@@ -17,7 +17,7 @@ import {
   saveProjectMap,
 } from "@/lib/studio.functions";
 
-export const Route = createFileRoute("/_authenticated/projects/$projectId")({
+export const Route = createFileRoute("/projects/$projectId")({
   head: () => ({
     meta: [
       { title: "Project Studio — DemoForge" },
