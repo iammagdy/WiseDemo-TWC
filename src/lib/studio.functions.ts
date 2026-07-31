@@ -519,11 +519,16 @@ export const runDemoScenes = createServerFn({ method: "POST" })
       })
       .eq("id", demo.id);
 
-    const result = await runScenesOverCdp(
-      websocketUrl,
-      plan.scenes.map((scene) => scene.action),
-      55000,
-    );
+    let result: { executed: number; error?: string };
+    try {
+      result = await runScenesOverCdp(
+        websocketUrl,
+        plan.scenes.map((scene) => scene.action),
+        55000,
+      );
+    } catch (err) {
+      result = { executed: 0, error: err instanceof Error ? err.message : String(err) };
+    }
 
     // Release session; grab replay URL
     const released = await releaseSteelSession(demo.steel_session_id);
