@@ -109,22 +109,40 @@ export type ScenePlan = {
   narration: string[];
 };
 
-async function openCdp(websocketUrl: string): Promise<WebSocket> {
-  // Steel's websocketUrl already includes auth. Cloudflare Workers require
-  // fetch with Upgrade header rather than `new WebSocket()`.
+export async function openCdp(websocketUrl: string): Promise<WebSocket> {
+  // Steel's websocketUrl already includes auth. Cloudflare Workers open sockets
+  // with a fetch Upgrade; Node (dev server) uses the standard WebSocket global.
   const upgradeUrl = websocketUrl.replace(/^ws/, "http");
-  const res = await fetch(upgradeUrl, {
-    headers: { Upgrade: "websocket" },
-  });
-  const socket = (res as unknown as { webSocket?: WebSocket }).webSocket;
-  if (!socket) {
-    throw new Error(`Could not open CDP WebSocket to Steel (status ${res.status}).`);
+  try {
+    const res = await fetch(upgradeUrl, { headers: { Upgrade: "websocket" } });
+    const socket = (res as unknown as { webSocket?: WebSocket }).webSocket;
+    if (socket) {
+      (socket as unknown as { accept: () => void }).accept();
+      return socket;
+    }
+  } catch {
+    /* fall through to the standard WebSocket client */
   }
-  (socket as unknown as { accept: () => void }).accept();
-  return socket;
+
+  if (typeof WebSocket === "undefined") {
+    throw new Error("This runtime cannot open a CDP WebSocket to the cloud browser.");
+  }
+
+  return await new Promise<WebSocket>((resolve, reject) => {
+    const socket = new WebSocket(websocketUrl);
+    const timer = setTimeout(() => reject(new Error("Timed out connecting to the cloud browser.")), 15000);
+    socket.addEventListener("open", () => {
+      clearTimeout(timer);
+      resolve(socket);
+    });
+    socket.addEventListener("error", () => {
+      clearTimeout(timer);
+      reject(new Error("Could not connect to the cloud browser session."));
+    });
+  });
 }
 
-function cdpCall(
+export function cdpCall(
   socket: WebSocket,
   id: number,
   method: string,
@@ -158,8 +176,60 @@ function cdpCall(
   });
 }
 
-function delay(ms: number) {
+export function delay(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// ---- Recording retrieval ---------------------------------------------
+// Steel finalizes each session recording as fragmented MP4 segments behind an
+// HLS playlist. Concatenating init.mp4 + segments yields a single playable MP4.
+
+export async function fetchSessionMp4(
+  sessionId: string,
+  { attempts = 6, waitMs = 4000 }: { attempts?: number; waitMs?: number } = {},
+): Promise<{ bytes: Uint8Array; durationSeconds: number } | null> {
+  const key = requireSteelKey();
+
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const res = await fetch(`${STEEL_BASE}/sessions/${sessionId}/hls`, {
+      headers: { "Steel-Api-Key": key },
+    });
+    const playlist = res.ok ? await res.text() : "";
+
+    if (playlist.includes("#EXT-X-ENDLIST")) {
+      const initMatch = playlist.match(/#EXT-X-MAP:URI="([^"]+)"/);
+      const segments = playlist.match(/^https?:\/\/\S+$/gm) ?? [];
+      const duration = (playlist.match(/#EXTINF:([\d.]+)/g) ?? []).reduce(
+        (total, line) => total + Number(line.replace("#EXTINF:", "")),
+        0,
+      );
+      if (!segments.length) return null;
+
+      const urls = [initMatch?.[1], ...segments].filter((u): u is string => Boolean(u));
+      const chunks: Uint8Array[] = [];
+      let size = 0;
+      for (const url of urls) {
+        const partRes = await fetch(url);
+        if (!partRes.ok) continue;
+        const buffer = new Uint8Array(await partRes.arrayBuffer());
+        chunks.push(buffer);
+        size += buffer.byteLength;
+      }
+      if (!size) return null;
+
+      const bytes = new Uint8Array(size);
+      let offset = 0;
+      for (const chunk of chunks) {
+        bytes.set(chunk, offset);
+        offset += chunk.byteLength;
+      }
+      return { bytes, durationSeconds: Math.round(duration) };
+    }
+
+    await delay(waitMs);
+  }
+
+  return null;
 }
 
 export async function runScenesOverCdp(
