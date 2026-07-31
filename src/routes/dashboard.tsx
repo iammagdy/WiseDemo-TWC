@@ -1,11 +1,10 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
-import { ArrowRight, Loader2, LogOut, Plus, Video } from "lucide-react";
+import { ArrowRight, Loader2, Plus, Video } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
-import { createProject } from "@/lib/studio.functions";
-import { supabase } from "@/integrations/supabase/client";
+import { createProject, listProjects, type ProjectListItem } from "@/lib/studio.functions";
 
 export const Route = createFileRoute("/dashboard")({
   head: () => ({
@@ -21,35 +20,25 @@ export const Route = createFileRoute("/dashboard")({
   component: Dashboard,
 });
 
-type ProjectRow = {
-  id: string;
-  name: string;
-  base_url: string;
-  created_at: string;
-};
+type ProjectRow = ProjectListItem;
 
 function Dashboard() {
-  const navigate = useNavigate();
-  const { user } = Route.useRouteContext();
+  const fetchProjects = useServerFn(listProjects);
   const [projects, setProjects] = useState<ProjectRow[] | null>(null);
   const [open, setOpen] = useState(false);
 
   const loadProjects = useCallback(async () => {
-    const { data } = await supabase
-      .from("projects")
-      .select("id, name, base_url, created_at")
-      .order("created_at", { ascending: false });
-    setProjects((data as ProjectRow[]) ?? []);
-  }, []);
+    try {
+      const rows = await fetchProjects();
+      setProjects(rows);
+    } catch {
+      setProjects([]);
+    }
+  }, [fetchProjects]);
 
   useEffect(() => {
     void loadProjects();
   }, [loadProjects]);
-
-  async function signOut() {
-    await supabase.auth.signOut();
-    navigate({ to: "/auth", replace: true });
-  }
 
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -63,15 +52,9 @@ function Dashboard() {
             </span>
           </Link>
           <div className="flex shrink-0 items-center gap-3 text-sm">
-            <span className="hidden text-muted-foreground md:inline">{user?.email}</span>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={signOut}
-            >
-              <LogOut />
-              <span className="hidden sm:inline">Sign out</span>
-            </Button>
+            <span className="hidden font-mono-tight text-[11px] uppercase tracking-widest text-muted-foreground md:inline">
+              Open workspace
+            </span>
           </div>
         </div>
       </header>
