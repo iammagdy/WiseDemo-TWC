@@ -28,7 +28,6 @@ npm run dev
 - React
 - Tailwind CSS
 
-
 ## WiseDemo (this app)
 
 Agentic demo-video studio: point it at a SaaS URL, it scans the site, plans a
@@ -56,6 +55,7 @@ credentials in a publicly deployed instance.
 - `src/lib/studio-scanner.server.ts` — site scan / site-map builder
 - `src/lib/steel-recon.server.ts` — agentic login + DOM recon pass
 - `src/lib/scene-planner.server.ts` — AI shot-list planner
+- `src/lib/recording-pass.server.ts` — fresh-session capture and duration policy
 - `src/lib/steel-recorder.server.ts` — CDP driver + recording retrieval
 - `src/lib/mcp/*` — MCP server and tools
 
@@ -79,6 +79,12 @@ pending -> scanning -> planning -> recording -> rendering -> ready
 `ready` is reserved for a validated recording that has been uploaded to the
 private `demo-recordings` bucket and successfully fetched through a short-lived
 signed URL. A Steel live viewer or replay URL never makes a demo ready.
+
+Reconnaissance and scene planning happen before the deliverable capture. The
+recon browser is explicitly released, then WiseDemo opens a fresh recording
+session, signs in again when stored access exists, and executes only the curated
+scene plan. The capture targets 50 seconds, must finalize between 45 and 69
+seconds, and fails validation outside that range.
 
 After the browser actions finish, WiseDemo explicitly releases the Steel
 session and polls the documented `GET /v1/sessions/{sessionId}/hls` endpoint.

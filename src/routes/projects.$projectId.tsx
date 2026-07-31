@@ -211,7 +211,7 @@ function ProjectStudio() {
       setWorkspace((current) =>
         current ? { ...current, demos: [demo, ...current.demos] } : current,
       );
-      setNotice("Real cloud browser launched. Watch it drive your site live below.");
+      setNotice("Demo queued. The live browser appears when reconnaissance starts.");
       // Start the resumable server execution and immediately poll the durable
       // database state. A refresh safely re-issues this idempotent request.
       ensureExecution(demo.id);
@@ -264,8 +264,7 @@ function ProjectStudio() {
             return;
           }
           if (
-            ["pending", "starting", "scanning", "planning", "recording"].includes(status.status) &&
-            status.steel_session_id
+            ["pending", "starting", "scanning", "planning", "recording"].includes(status.status)
           ) {
             ensureExecution(demoId);
           }
@@ -299,10 +298,7 @@ function ProjectStudio() {
   useEffect(() => {
     if (!workspace) return;
     for (const demo of workspace.demos) {
-      if (
-        ["pending", "starting", "scanning", "planning", "recording"].includes(demo.status) &&
-        demo.steel_session_id
-      ) {
+      if (["pending", "starting", "scanning", "planning", "recording"].includes(demo.status)) {
         ensureExecution(demo.id);
       }
       if (

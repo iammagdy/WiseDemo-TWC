@@ -11,6 +11,7 @@ import {
   maskCredentialIdentifier,
 } from "./credential-crypto.server";
 import { normalizePublicUrl, scanWebsite } from "./studio-scanner.server";
+import { assertProfessionalRecordingDuration, executeRecordingPass } from "./recording-pass.server";
 import {
   recordingObjectPath,
   storeRecordingArtifact,
@@ -19,14 +20,18 @@ import {
 import {
   createSteelSession,
   fetchSessionMp4,
-  getSteelSession,
   releaseSteelSession,
   runScenesOverCdp,
   SteelRecordingError,
   type CdpAction,
   type DecryptedCredentials,
 } from "./steel-recorder.server";
-import { outlineToMarkdown, reconSite, type ReconResult } from "./steel-recon.server";
+import {
+  authenticateSite,
+  outlineToMarkdown,
+  reconSite,
+  type ReconResult,
+} from "./steel-recon.server";
 import { planDemoScenes } from "./scene-planner.server";
 import { stableRecordingUrl } from "./demo-state";
 
@@ -531,69 +536,11 @@ export const createDemoJob = createServerFn({ method: "POST" })
       "Demo job created in the shared recording queue.",
     );
 
-    // Create the Steel session synchronously so the studio can expose its live
-    // viewer while the resumable execution request begins.
-    try {
-      const session = await createSteelSession(project.base_url);
-
-      const { error: sessionUpdateError } = await context.supabase
-        .from("demos")
-        .update({
-          status: "scanning",
-          progress_pct: 15,
-          current_step: "Real browser session live \u2014 scouting the product\u2026",
-          steel_session_id: session.id,
-          live_view_url: session.liveViewUrl ?? session.debugUrl ?? null,
-          session_viewer_url: session.sessionViewerUrl ?? null,
-        })
-        .eq("id", demo.id);
-
-      if (sessionUpdateError) {
-        await releaseSteelSession(session.id).catch(() => undefined);
-        throw new Error(sessionUpdateError.message);
-      }
-      await appendDemoEvent(
-        context,
-        demo.id,
-        "info",
-        "STEEL_SESSION_CREATED",
-        "Steel browser session created with recording enabled.",
-      );
-
-      return withDurableRecordingUrl({
-        ...demo,
-        status: "scanning" as const,
-        progress_pct: 15,
-        current_step: "Real browser session live \u2014 scouting the product\u2026",
-        steel_session_id: session.id,
-        live_view_url: session.liveViewUrl ?? session.debugUrl ?? null,
-        session_viewer_url: session.sessionViewerUrl ?? null,
-      });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Failed to start Steel session.";
-      await context.supabase
-        .from("demos")
-        .update({
-          status: "failed",
-          progress_pct: 0,
-          current_step: "Could not start the cloud browser.",
-          error_code: "STEEL_SESSION_CREATE_FAILED",
-          error_message: message,
-        })
-        .eq("id", demo.id);
-      await appendDemoEvent(
-        context,
-        demo.id,
-        "error",
-        "STEEL_SESSION_CREATE_FAILED",
-        "Steel browser session could not be created.",
-      );
-      throw new Error(message);
-    }
+    return withDurableRecordingUrl(demo);
   });
 
-// Recon the product with the live browser, let the AI write the shot list,
-// drive it for real, then release the session so Steel finalizes the video.
+// Recon and planning use a disposable Steel session. The final artifact comes
+// from a second fresh session that contains only login and the curated scenes.
 export const runDemoScenes = createServerFn({ method: "POST" })
   .inputValidator((data) => z.object({ demoId: z.string().uuid() }).parse(data))
   .handler(async ({ data }) => {
@@ -612,24 +559,9 @@ export const runDemoScenes = createServerFn({ method: "POST" })
     if (["rendering", "ready", "failed"].includes(demo.status)) {
       return withDurableRecordingUrl(demo);
     }
-    if (!demo.steel_session_id) {
-      const message = "No active Steel session exists for this demo.";
-      await context.supabase
-        .from("demos")
-        .update({
-          status: "failed",
-          progress_pct: 0,
-          current_step: message,
-          error_code: "MISSING_STEEL_SESSION",
-          error_message: message,
-        })
-        .eq("id", demo.id);
-      await appendDemoEvent(context, demo.id, "error", "MISSING_STEEL_SESSION", message);
-      throw new Error(message);
-    }
 
     const now = new Date();
-    const staleBefore = new Date(now.getTime() - 2 * 60_000).toISOString();
+    const staleBefore = new Date(now.getTime() - 8 * 60_000).toISOString();
     const { data: claimed, error: claimError } = await context.supabase
       .from("demos")
       .update({
@@ -649,36 +581,60 @@ export const runDemoScenes = createServerFn({ method: "POST" })
     if (claimError) throw new Error(claimError.message);
     if (!claimed) return withDurableRecordingUrl(demo);
 
-    await appendDemoEvent(
-      context,
-      demo.id,
-      "info",
-      "RECON_STARTED",
-      "Product recon started in the Steel browser.",
-    );
+    if (demo.steel_session_id) {
+      await releaseSteelSession(demo.steel_session_id).catch(() => undefined);
+      await appendDemoEvent(
+        context,
+        demo.id,
+        "warn",
+        "STALE_SESSION_RELEASED",
+        "A previous in-flight session was released before execution restarted.",
+      );
+    }
 
-    const { data: project } = await context.supabase
-      .from("projects")
-      .select("id, name, base_url, site_map_md")
-      .eq("id", demo.project_id)
-      .maybeSingle();
-    if (!project) throw new Error("Project not found.");
-
-    const { credentials, loginUrl } = await loadCredentials(
-      context,
-      demo.project_id,
-      context.userId,
-    );
-    let releaseAttempted = false;
+    let activeReconSessionId: string | null = null;
+    let credentials: DecryptedCredentials = null;
     try {
-      const session = await getSteelSession(demo.steel_session_id);
-      const websocketUrl =
-        session && typeof session.websocketUrl === "string" ? session.websocketUrl : null;
+      await appendDemoEvent(
+        context,
+        demo.id,
+        "info",
+        "RECON_STARTED",
+        "Product recon started in the Steel browser.",
+      );
+
+      const { data: project } = await context.supabase
+        .from("projects")
+        .select("id, name, base_url, site_map_md")
+        .eq("id", demo.project_id)
+        .maybeSingle();
+      if (!project) throw new Error("Project not found.");
+
+      const loadedAccess = await loadCredentials(context, demo.project_id, context.userId);
+      credentials = loadedAccess.credentials;
+      const loginUrl = loadedAccess.loginUrl;
+
+      const session = await createSteelSession(project.base_url);
+      activeReconSessionId = session.id;
+      const websocketUrl = session.websocketUrl ?? null;
       if (!websocketUrl) {
-        throw Object.assign(new Error("Cloud browser session is no longer available."), {
-          code: "MISSING_STEEL_SESSION",
+        throw Object.assign(new Error("The recon session has no browser connection."), {
+          code: "MISSING_RECON_WEBSOCKET",
         });
       }
+
+      const { error: reconLiveError } = await context.supabase
+        .from("demos")
+        .update({
+          status: "scanning",
+          progress_pct: 20,
+          current_step: "Agent scouting the product in a disposable browser\u2026",
+          steel_session_id: session.id,
+          live_view_url: session.liveViewUrl ?? session.debugUrl ?? null,
+          session_viewer_url: session.sessionViewerUrl ?? null,
+        })
+        .eq("id", demo.id);
+      if (reconLiveError) throw new Error(reconLiveError.message);
 
       const recon: ReconResult = await reconSite({
         websocketUrl,
@@ -687,11 +643,14 @@ export const runDemoScenes = createServerFn({ method: "POST" })
         credentials,
         maxPages: 3,
       });
+      const currentSiteMap = recon.pages.length
+        ? outlineToMarkdown(project.name, project.base_url, recon)
+        : project.site_map_md;
       if (recon.pages.length) {
         await context.supabase
           .from("projects")
           .update({
-            site_map_md: outlineToMarkdown(project.name, project.base_url, recon),
+            site_map_md: currentSiteMap,
             site_map_source: "manual",
             site_map_updated_at: new Date().toISOString(),
           })
@@ -699,12 +658,25 @@ export const runDemoScenes = createServerFn({ method: "POST" })
           .eq("owner_id", context.userId);
       }
 
+      await releaseSteelSession(session.id);
+      activeReconSessionId = null;
+      await appendDemoEvent(
+        context,
+        demo.id,
+        "info",
+        "RECON_SESSION_RELEASED",
+        "Disposable recon session released before final recording.",
+      );
+
       await context.supabase
         .from("demos")
         .update({
           status: "planning",
           progress_pct: 40,
           current_step: "AI writing a verifiable shot list\u2026",
+          steel_session_id: null,
+          live_view_url: null,
+          session_viewer_url: null,
         })
         .eq("id", demo.id);
       await appendDemoEvent(
@@ -719,7 +691,7 @@ export const runDemoScenes = createServerFn({ method: "POST" })
         productName: project.name,
         baseUrl: project.base_url,
         featurePrompt: demo.feature_prompt,
-        siteMapMd: project.site_map_md,
+        siteMapMd: currentSiteMap,
         recon,
         loginUrl,
       });
@@ -734,52 +706,76 @@ export const runDemoScenes = createServerFn({ method: "POST" })
         shot: scene.narration || `Action: ${scene.action.type}`,
         action: publicSceneAction(scene.action),
       }));
-      await context.supabase
-        .from("demos")
-        .update({
-          status: "recording",
-          progress_pct: 55,
-          current_step: "Recording the real product walkthrough\u2026",
-          scene_script: sceneScript,
-        })
-        .eq("id", demo.id);
-      await appendDemoEvent(
-        context,
-        demo.id,
-        "info",
-        "RECORDING_STARTED",
-        `${plan.scenes.length} planned browser actions are ready to execute.`,
-      );
-
-      const result = await runScenesOverCdp(
-        websocketUrl,
-        plan.scenes.map((scene) => scene.action),
-        90_000,
-      );
-      for (const diagnostic of result.diagnostics) {
-        await appendDemoEvent(
-          context,
-          demo.id,
-          diagnostic.success ? "info" : "error",
-          diagnostic.code,
-          `Action ${diagnostic.index + 1} (${diagnostic.type}): ${diagnostic.message}`,
-        );
-      }
-      if (!result.completed) {
-        throw Object.assign(
-          new Error(result.error ?? "Not every planned browser action completed."),
-          { code: "CDP_ACTION_FAILED" },
-        );
-      }
-
-      releaseAttempted = true;
-      const released = await releaseSteelSession(demo.steel_session_id);
+      const recordingCredentials = credentials;
+      const recordingStartUrl = recordingCredentials
+        ? (loginUrl ?? recordingCredentials.loginUrl)
+        : project.base_url;
+      const recordingPass = await executeRecordingPass({
+        startUrl: recordingStartUrl,
+        createSession: createSteelSession,
+        releaseSession: releaseSteelSession,
+        publishLiveSession: async (recordingSession) => {
+          const { error: recordingUpdateError } = await context.supabase
+            .from("demos")
+            .update({
+              status: "recording",
+              progress_pct: 55,
+              current_step: "Recording login and the curated product walkthrough\u2026",
+              scene_script: sceneScript,
+              steel_session_id: recordingSession.id,
+              live_view_url: recordingSession.liveViewUrl ?? recordingSession.debugUrl ?? null,
+              session_viewer_url: recordingSession.sessionViewerUrl ?? null,
+            })
+            .eq("id", demo.id);
+          if (recordingUpdateError) throw new Error(recordingUpdateError.message);
+          await appendDemoEvent(
+            context,
+            demo.id,
+            "info",
+            "RECORDING_STARTED",
+            `${plan.scenes.length} verified browser actions are recording from a fresh session (${plan.source} plan).`,
+          );
+        },
+        authenticate: recordingCredentials
+          ? async (recordingWebsocketUrl) => {
+              await authenticateSite({
+                websocketUrl: recordingWebsocketUrl,
+                loginUrl: recordingStartUrl,
+                credentials: recordingCredentials,
+              });
+              await appendDemoEvent(
+                context,
+                demo.id,
+                "info",
+                "RECORDING_LOGIN_VERIFIED",
+                "Stored access signed into the fresh recording session successfully.",
+              );
+            }
+          : undefined,
+        executeScenes: async (recordingWebsocketUrl, maxWallMs) => {
+          const result = await runScenesOverCdp(
+            recordingWebsocketUrl,
+            plan.scenes.map((scene) => scene.action),
+            maxWallMs,
+          );
+          for (const diagnostic of result.diagnostics) {
+            await appendDemoEvent(
+              context,
+              demo.id,
+              diagnostic.success ? "info" : "error",
+              diagnostic.code,
+              `Action ${diagnostic.index + 1} (${diagnostic.type}): ${diagnostic.message}`,
+            );
+          }
+          return result;
+        },
+      });
       await appendDemoEvent(
         context,
         demo.id,
         "info",
         "STEEL_SESSION_RELEASED",
-        "Steel browser session released; recording finalization can begin.",
+        "Fresh recording session released after the verified walkthrough.",
       );
 
       const { data: updated, error: updateError } = await context.supabase
@@ -788,7 +784,11 @@ export const runDemoScenes = createServerFn({ method: "POST" })
           status: "rendering",
           progress_pct: 80,
           current_step: "Waiting for Steel to finalize the video stream\u2026",
-          session_viewer_url: released.sessionViewerUrl ?? demo.session_viewer_url ?? null,
+          steel_session_id: recordingPass.session.id,
+          session_viewer_url:
+            recordingPass.releasedSession.sessionViewerUrl ??
+            recordingPass.session.sessionViewerUrl ??
+            null,
           live_view_url: null,
           execution_started_at: null,
           error_code: null,
@@ -800,9 +800,8 @@ export const runDemoScenes = createServerFn({ method: "POST" })
       if (updateError) throw new Error(updateError.message);
       return withDurableRecordingUrl(updated);
     } catch (runError) {
-      if (!releaseAttempted) {
-        releaseAttempted = true;
-        await releaseSteelSession(demo.steel_session_id).catch(() => undefined);
+      if (activeReconSessionId) {
+        await releaseSteelSession(activeReconSessionId).catch(() => undefined);
       }
       const code =
         runError && typeof runError === "object" && "code" in runError
@@ -929,6 +928,8 @@ export const finalizeDemoRecording = createServerFn({ method: "POST" })
         );
         return withDurableRecordingUrl(pending);
       }
+
+      assertProfessionalRecordingDuration(recording.durationSeconds);
 
       const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
       const path = recordingObjectPath(context.userId, demo.id);

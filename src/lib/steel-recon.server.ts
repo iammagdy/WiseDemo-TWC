@@ -128,6 +128,88 @@ async function outline(cdp: Cdp): Promise<PageOutline | null> {
   }
 }
 
+async function signIn(
+  cdp: Cdp,
+  target: string,
+  credentials: NonNullable<DecryptedCredentials>,
+): Promise<PageOutline> {
+  await goto(cdp, target, 3500);
+  const filled = (await evaluate(
+    cdp,
+    `(() => {
+      const user = document.querySelector('input[type="email"], input[name="email"], input[name="username"], input[autocomplete="username"], input[type="text"]');
+      const pass = document.querySelector('input[type="password"], input[name="password"]');
+      if (!user || !pass) return { filled: false, submitted: false };
+      const setValue = (el, value) => {
+        const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+        const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+        if (!setter) return false;
+        el.focus();
+        setter.call(el, value);
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+        return el.value === value;
+      };
+      const userApplied = setValue(user, ${JSON.stringify(credentials.username)});
+      const passApplied = setValue(pass, ${JSON.stringify(credentials.secret)});
+      const form = pass.closest('form');
+      const submit = (form && form.querySelector('button[type="submit"], input[type="submit"]')) ||
+        Array.from(document.querySelectorAll('button')).find((button) => /sign in|log in|login|continue/i.test(button.innerText || ''));
+      if (submit) submit.click();
+      else if (form) form.requestSubmit ? form.requestSubmit() : form.submit();
+      return { filled: userApplied && passApplied, submitted: Boolean(submit || form) };
+    })()`,
+  )) as { filled?: boolean; submitted?: boolean } | null;
+  if (!filled?.filled || !filled.submitted) {
+    throw new Error("Stored credential fields could not be filled and submitted.");
+  }
+
+  const leftLoginForm = await waitUntil(
+    cdp,
+    `(() => {
+      const password = document.querySelector('input[type="password"], input[name="password"]');
+      return !password;
+    })()`,
+    15_000,
+  );
+  const afterLogin = await outline(cdp);
+  if (!afterLogin) {
+    throw new Error("Could not inspect the page after credential sign-in.");
+  }
+  const stillOnLogin = /password/i.test(JSON.stringify(afterLogin.inputs));
+  if (
+    !isVerifiedLoginOutcome({
+      fieldsApplied: filled.filled === true,
+      submitted: filled.submitted === true,
+      loginFormGone: leftLoginForm,
+      outlineHasPasswordField: stillOnLogin,
+    })
+  ) {
+    throw new Error("Stored credential sign-in did not reach an authenticated screen.");
+  }
+  return afterLogin;
+}
+
+/** Signs into a fresh recording session without crawling unrelated product routes. */
+export async function authenticateSite(input: {
+  websocketUrl: string;
+  loginUrl: string;
+  credentials: NonNullable<DecryptedCredentials>;
+}): Promise<PageOutline> {
+  const cdp = await attach(input.websocketUrl);
+  try {
+    return await signIn(cdp, input.loginUrl, input.credentials);
+  } catch {
+    throw new Error("Stored credential login failed. Check the login URL and test credentials.");
+  } finally {
+    try {
+      cdp.socket.close();
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
 /** Opens the product in a real browser, signs in when possible, and reads the real DOM. */
 export async function reconSite(input: {
   websocketUrl: string;
@@ -150,61 +232,9 @@ export async function reconSite(input: {
 
     if (credentials) {
       const target = loginUrl ?? credentials.loginUrl ?? baseUrl;
-      await goto(cdp, target, 3500);
-      const filled = (await evaluate(
-        cdp,
-        `(() => {
-          const user = document.querySelector('input[type="email"], input[name="email"], input[name="username"], input[autocomplete="username"], input[type="text"]');
-          const pass = document.querySelector('input[type="password"], input[name="password"]');
-          if (!user || !pass) return { filled: false, submitted: false };
-          const setValue = (el, value) => {
-            const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
-            const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
-            if (!setter) return false;
-            el.focus();
-            setter.call(el, value);
-            el.dispatchEvent(new Event('input', { bubbles: true }));
-            el.dispatchEvent(new Event('change', { bubbles: true }));
-            return el.value === value;
-          };
-          const userApplied = setValue(user, ${JSON.stringify(credentials.username)});
-          const passApplied = setValue(pass, ${JSON.stringify(credentials.secret)});
-          const form = pass.closest('form');
-          const submit = (form && form.querySelector('button[type="submit"], input[type="submit"]')) ||
-            Array.from(document.querySelectorAll('button')).find((b) => /sign in|log in|login|continue/i.test(b.innerText || ''));
-          if (submit) submit.click();
-          else if (form) form.requestSubmit ? form.requestSubmit() : form.submit();
-          return { filled: userApplied && passApplied, submitted: Boolean(submit || form) };
-        })()`,
-      )) as { filled?: boolean; submitted?: boolean } | null;
-      if (!filled?.filled || !filled.submitted) {
-        throw new Error("Stored credential fields could not be filled and submitted.");
-      }
-      const leftLoginForm = await waitUntil(
-        cdp,
-        `(() => {
-          const password = document.querySelector('input[type="password"], input[name="password"]');
-          return !password;
-        })()`,
-        15_000,
-      );
-      const afterLogin = await outline(cdp);
-      if (afterLogin) {
-        const stillOnLogin = /password/i.test(JSON.stringify(afterLogin.inputs));
-        loggedIn = isVerifiedLoginOutcome({
-          fieldsApplied: filled.filled === true,
-          submitted: filled.submitted === true,
-          loginFormGone: leftLoginForm,
-          outlineHasPasswordField: stillOnLogin,
-        });
-        pages.push(afterLogin);
-        if (!loggedIn) {
-          throw new Error("Stored credential sign-in did not reach an authenticated screen.");
-        }
-        notes.push("Signed in with the stored credentials.");
-      } else {
-        throw new Error("Could not inspect the page after credential sign-in.");
-      }
+      pages.push(await signIn(cdp, target, credentials));
+      loggedIn = true;
+      notes.push("Signed in with the stored credentials.");
     }
 
     const seen = new Set(pages.map((p) => p.url));
@@ -212,7 +242,7 @@ export async function reconSite(input: {
     const candidates = (pages.at(-1)?.navLinks ?? [])
       .map((l) => l.href)
       .filter((href) => isSafeReconNavigation(href, origin) && !seen.has(href))
-      .slice(0, maxPages - pages.length);
+      .slice(0, Math.max(0, maxPages - pages.length));
 
     for (const href of candidates) {
       await goto(cdp, href, 3000);
