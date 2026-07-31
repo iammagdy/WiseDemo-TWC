@@ -2,6 +2,8 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes } from "crypt
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 
+import type { Json } from "@/integrations/supabase/types";
+
 import { normalizePublicUrl, scanWebsite } from "./studio-scanner.server";
 import {
   createSteelSession,
@@ -138,7 +140,7 @@ export type DemoRecord = {
   id: string;
   title: string;
   feature_prompt: string;
-  scene_script: unknown;
+  scene_script: Json | null;
   status: string;
   progress_pct: number;
   current_step: string | null;
