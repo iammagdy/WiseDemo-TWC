@@ -59,8 +59,13 @@ export type Database = {
           creatomate_render_id: string | null
           current_step: string | null
           duration_seconds: number | null
+          error_code: string | null
           error_message: string | null
+          execution_attempts: number
+          execution_started_at: string | null
           feature_prompt: string
+          finalization_attempts: number
+          finalization_started_at: string | null
           id: string
           is_public: boolean
           live_view_url: string | null
@@ -69,6 +74,8 @@ export type Database = {
           progress_pct: number
           project_id: string
           recording_url: string | null
+          recording_completed_at: string | null
+          recording_object_path: string | null
           scene_script: Json | null
           session_viewer_url: string | null
           share_slug: string | null
@@ -84,8 +91,13 @@ export type Database = {
           creatomate_render_id?: string | null
           current_step?: string | null
           duration_seconds?: number | null
+          error_code?: string | null
           error_message?: string | null
+          execution_attempts?: number
+          execution_started_at?: string | null
           feature_prompt: string
+          finalization_attempts?: number
+          finalization_started_at?: string | null
           id?: string
           is_public?: boolean
           live_view_url?: string | null
@@ -94,6 +106,8 @@ export type Database = {
           progress_pct?: number
           project_id: string
           recording_url?: string | null
+          recording_completed_at?: string | null
+          recording_object_path?: string | null
           scene_script?: Json | null
           session_viewer_url?: string | null
           share_slug?: string | null
@@ -109,8 +123,13 @@ export type Database = {
           creatomate_render_id?: string | null
           current_step?: string | null
           duration_seconds?: number | null
+          error_code?: string | null
           error_message?: string | null
+          execution_attempts?: number
+          execution_started_at?: string | null
           feature_prompt?: string
+          finalization_attempts?: number
+          finalization_started_at?: string | null
           id?: string
           is_public?: boolean
           live_view_url?: string | null
@@ -119,6 +138,8 @@ export type Database = {
           progress_pct?: number
           project_id?: string
           recording_url?: string | null
+          recording_completed_at?: string | null
+          recording_object_path?: string | null
           scene_script?: Json | null
           session_viewer_url?: string | null
           share_slug?: string | null

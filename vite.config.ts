@@ -14,6 +14,10 @@ export default defineConfig({
     server: { entry: "server" },
   },
   vite: {
-    plugins: [mcpPlugin()],
+    // mcp-js 0.26.1 compares Vite's normalized `D:/...` root with native
+    // Windows `D:\\...` paths and rejects its own default routes directory.
+    // Generated MCP routes are committed; keep generation enabled everywhere
+    // else while allowing local Windows builds and route-tree generation.
+    plugins: process.platform === "win32" ? [] : [mcpPlugin()],
   },
 });

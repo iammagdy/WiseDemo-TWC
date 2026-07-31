@@ -1,6 +1,18 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
-import { ArrowLeft, Download, ExternalLink, Film, KeyRound, Loader2, Map, Play, RefreshCw, Save, Sparkles } from "lucide-react";
+import {
+  ArrowLeft,
+  Download,
+  ExternalLink,
+  Film,
+  KeyRound,
+  Loader2,
+  Map,
+  Play,
+  RefreshCw,
+  Save,
+  Sparkles,
+} from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -11,19 +23,29 @@ import {
   finalizeDemoRecording,
   getDemoStatus,
   getProjectWorkspace,
+  retryDemoFinalization,
   runDemoScenes,
   scanProjectSite,
   saveProjectCredential,
   saveProjectMap,
 } from "@/lib/studio.functions";
+import { getDemoPlaybackState, safeRecordingFilename, stableRecordingUrl } from "@/lib/demo-state";
 
 export const Route = createFileRoute("/projects/$projectId")({
   head: () => ({
     meta: [
       { title: "Project Studio — WiseDemo" },
-      { name: "description", content: "Map a SaaS product, add secure access, and queue real browser demo recordings in WiseDemo." },
+      {
+        name: "description",
+        content:
+          "Map a SaaS product, add secure access, and queue real browser demo recordings in WiseDemo.",
+      },
       { property: "og:title", content: "Project Studio — WiseDemo" },
-      { property: "og:description", content: "Map a SaaS product, add secure access, and queue real browser demo recordings in WiseDemo." },
+      {
+        property: "og:description",
+        content:
+          "Map a SaaS product, add secure access, and queue real browser demo recordings in WiseDemo.",
+      },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },
     ],
@@ -43,6 +65,7 @@ function ProjectStudio() {
   const scanSite = useServerFn(scanProjectSite);
   const runScenes = useServerFn(runDemoScenes);
   const finalizeRecording = useServerFn(finalizeDemoRecording);
+  const retryFinalization = useServerFn(retryDemoFinalization);
   const fetchDemoStatus = useServerFn(getDemoStatus);
 
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
@@ -58,6 +81,7 @@ function ProjectStudio() {
   const [busyAction, setBusyAction] = useState<"map" | "creds" | "demo" | "scan" | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const pollingRef = useRef<Set<string>>(new Set());
+  const executionRef = useRef<Set<string>>(new Set());
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -67,8 +91,12 @@ function ProjectStudio() {
       setWorkspace(next);
       setMapText(next.project.site_map_md ?? starterMap(next.project.name, next.project.base_url));
       setDescription(next.project.description ?? "");
-      setLoginUrl(next.credentials?.login_url ?? detectLoginUrlFromMap(next.project.site_map_md) ?? "");
-      setUsername(next.credentials?.username_hint ?? "");
+      setLoginUrl(
+        next.credentials?.login_url ?? detectLoginUrlFromMap(next.project.site_map_md) ?? "",
+      );
+      // The browser receives only a masked hint; require the real identifier
+      // again whenever access is replaced so a masked value is never encrypted.
+      setUsername("");
       if (!demoTitle) setDemoTitle(`${next.project.name} product demo`);
       if (!featurePrompt) setFeaturePrompt(defaultFeaturePrompt(next.project.name));
     } catch (err: unknown) {
@@ -91,6 +119,31 @@ function ProjectStudio() {
       { label: "Demos", done: workspace.demos.length > 0 },
     ];
   }, [workspace]);
+
+  const ensureExecution = useCallback(
+    (demoId: string) => {
+      if (executionRef.current.has(demoId)) return;
+      executionRef.current.add(demoId);
+      void runScenes({ data: { demoId } })
+        .then((result) => {
+          setWorkspace((current) =>
+            current
+              ? {
+                  ...current,
+                  demos: current.demos.map((demo: Demo) =>
+                    demo.id === demoId ? { ...demo, ...result } : demo,
+                  ),
+                }
+              : current,
+          );
+        })
+        .catch((err: unknown) => {
+          setError(err instanceof Error ? err.message : "Recording execution failed.");
+        })
+        .finally(() => executionRef.current.delete(demoId));
+    },
+    [runScenes],
+  );
 
   async function handleSaveMap() {
     setBusyAction("map");
@@ -116,7 +169,8 @@ function ProjectStudio() {
       setWorkspace((current) => (current ? { ...current, project: scanned } : current));
       setMapText(scanned.site_map_md ?? "");
       setDescription(scanned.description ?? "");
-      if (!workspace?.credentials?.login_url) setLoginUrl(detectLoginUrlFromMap(scanned.site_map_md) ?? "");
+      if (!workspace?.credentials?.login_url)
+        setLoginUrl(detectLoginUrlFromMap(scanned.site_map_md) ?? "");
       setNotice("Real site scanned and product map updated.");
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Could not scan this site.");
@@ -130,8 +184,11 @@ function ProjectStudio() {
     setNotice(null);
     setError(null);
     try {
-      const saved = await saveCredential({ data: { projectId, kind: "password", loginUrl, username, secret } });
+      const saved = await saveCredential({
+        data: { projectId, kind: "password", loginUrl, username, secret },
+      });
       setWorkspace((current) => (current ? { ...current, credentials: saved } : current));
+      setUsername("");
       setSecret("");
       setNotice("Access saved.");
     } catch (err: unknown) {
@@ -151,29 +208,40 @@ function ProjectStudio() {
     setError(null);
     try {
       const demo = await createDemo({ data: { projectId, title: demoTitle, featurePrompt } });
-      setWorkspace((current) => (current ? { ...current, demos: [demo, ...current.demos] } : current));
+      setWorkspace((current) =>
+        current ? { ...current, demos: [demo, ...current.demos] } : current,
+      );
       setNotice("Real cloud browser launched. Watch it drive your site live below.");
-      // Kick off scene execution in the background, then poll
-      void runScenes({ data: { demoId: demo.id } })
-        .then((result) => {
-          setWorkspace((current) => {
-            if (!current) return current;
-            return {
-              ...current,
-              demos: current.demos.map((d) =>
-                d.id === demo.id ? { ...d, ...result } : d,
-              ),
-            };
-          });
-        })
-        .catch((err: unknown) => {
-          setError(err instanceof Error ? err.message : "Recording finished with an error.");
-        });
+      // Start the resumable server execution and immediately poll the durable
+      // database state. A refresh safely re-issues this idempotent request.
+      ensureExecution(demo.id);
       startPolling(demo.id);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Could not queue the demo.");
     } finally {
       setBusyAction(null);
+    }
+  }
+
+  async function handleRetryFinalization(demoId: string) {
+    setError(null);
+    setNotice(null);
+    try {
+      const rendering = await retryFinalization({ data: { demoId } });
+      setWorkspace((current) =>
+        current
+          ? {
+              ...current,
+              demos: current.demos.map((demo: Demo) =>
+                demo.id === demoId ? { ...demo, ...rendering } : demo,
+              ),
+            }
+          : current,
+      );
+      setNotice("Video finalization retry started.");
+      startPolling(demoId);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Could not retry video finalization.");
     }
   }
 
@@ -188,14 +256,18 @@ function ProjectStudio() {
             if (!current) return current;
             return {
               ...current,
-              demos: current.demos.map((d) =>
-                d.id === demoId ? { ...d, ...status } : d,
-              ),
+              demos: current.demos.map((d: Demo) => (d.id === demoId ? { ...d, ...status } : d)),
             };
           });
           if (status.status === "ready" || status.status === "failed") {
             pollingRef.current.delete(demoId);
             return;
+          }
+          if (
+            ["pending", "starting", "scanning", "planning", "recording"].includes(status.status) &&
+            status.steel_session_id
+          ) {
+            ensureExecution(demoId);
           }
           if (status.status === "rendering") {
             const finalized = await finalizeRecording({ data: { demoId } });
@@ -203,7 +275,9 @@ function ProjectStudio() {
               if (!current) return current;
               return {
                 ...current,
-                demos: current.demos.map((d) => (d.id === demoId ? { ...d, ...finalized } : d)),
+                demos: current.demos.map((d: Demo) =>
+                  d.id === demoId ? { ...d, ...finalized } : d,
+                ),
               };
             });
             if (finalized?.status === "ready") {
@@ -218,18 +292,28 @@ function ProjectStudio() {
       };
       setTimeout(tick, 2500);
     },
-    [fetchDemoStatus, finalizeRecording],
+    [ensureExecution, fetchDemoStatus, finalizeRecording],
   );
 
-  // Resume polling for any in-flight demos when workspace loads
+  // Resume both execution and polling for in-flight demos after a refresh.
   useEffect(() => {
     if (!workspace) return;
     for (const demo of workspace.demos) {
-      if (demo.status === "starting" || demo.status === "recording" || demo.status === "rendering") {
+      if (
+        ["pending", "starting", "scanning", "planning", "recording"].includes(demo.status) &&
+        demo.steel_session_id
+      ) {
+        ensureExecution(demo.id);
+      }
+      if (
+        ["pending", "starting", "scanning", "planning", "recording", "rendering"].includes(
+          demo.status,
+        )
+      ) {
         startPolling(demo.id);
       }
     }
-  }, [startPolling, workspace]);
+  }, [ensureExecution, startPolling, workspace]);
 
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -266,13 +350,22 @@ function ProjectStudio() {
             <section className="grid gap-6 lg:grid-cols-[1.35fr_0.65fr] lg:items-end">
               <div className="min-w-0">
                 <p className="font-mono-tight text-xs uppercase text-primary">/// Project reel</p>
-                <h1 className="mt-2 break-words text-2xl font-semibold sm:text-3xl md:text-5xl">{project.name}</h1>
-                <p className="mt-3 max-w-2xl break-all text-sm text-muted-foreground md:text-base">{project.base_url}</p>
+                <h1 className="mt-2 break-words text-2xl font-semibold sm:text-3xl md:text-5xl">
+                  {project.name}
+                </h1>
+                <p className="mt-3 max-w-2xl break-all text-sm text-muted-foreground md:text-base">
+                  {project.base_url}
+                </p>
               </div>
               <div className="grid grid-cols-3 gap-2 rounded-lg border border-border bg-card p-2">
                 {status.map((item) => (
-                  <div key={item.label} className="rounded-md bg-background px-2 py-2 text-center text-sm sm:px-3">
-                    <div className={item.done ? "text-primary" : "text-muted-foreground"}>{item.done ? "Ready" : "Open"}</div>
+                  <div
+                    key={item.label}
+                    className="rounded-md bg-background px-2 py-2 text-center text-sm sm:px-3"
+                  >
+                    <div className={item.done ? "text-primary" : "text-muted-foreground"}>
+                      {item.done ? "Ready" : "Open"}
+                    </div>
                     <div className="mt-1 text-xs text-muted-foreground">{item.label}</div>
                   </div>
                 ))}
@@ -281,7 +374,9 @@ function ProjectStudio() {
 
             {(error || notice) && (
               <div className="mt-6 rounded-lg border border-border bg-card px-4 py-3 text-sm">
-                <span className={error ? "text-destructive-foreground" : "text-primary"}>{error ?? notice}</span>
+                <span className={error ? "text-destructive-foreground" : "text-primary"}>
+                  {error ?? notice}
+                </span>
               </div>
             )}
 
@@ -293,7 +388,9 @@ function ProjectStudio() {
                   </span>
                   <div>
                     <h2 className="font-semibold">Product map</h2>
-                    <p className="text-sm text-muted-foreground">The agent uses this to choose the real pages and clicks.</p>
+                    <p className="text-sm text-muted-foreground">
+                      The agent uses this to choose the real pages and clicks.
+                    </p>
                   </div>
                 </div>
                 <Input
@@ -313,11 +410,18 @@ function ProjectStudio() {
                     {busyAction === "map" ? <Loader2 className="animate-spin" /> : <Save />}
                     Save map
                   </Button>
-                  <Button variant="outline" onClick={handleScanSite} disabled={busyAction === "scan"}>
+                  <Button
+                    variant="outline"
+                    onClick={handleScanSite}
+                    disabled={busyAction === "scan"}
+                  >
                     {busyAction === "scan" ? <Loader2 className="animate-spin" /> : <RefreshCw />}
                     Scan real site
                   </Button>
-                  <Button variant="outline" onClick={() => setMapText(starterMap(project.name, project.base_url))}>
+                  <Button
+                    variant="outline"
+                    onClick={() => setMapText(starterMap(project.name, project.base_url))}
+                  >
                     <Sparkles />
                     Starter map
                   </Button>
@@ -333,14 +437,32 @@ function ProjectStudio() {
                     <div>
                       <h2 className="font-semibold">Access</h2>
                       <p className="text-sm text-muted-foreground">
-                        {workspace.credentials?.kind === "password" ? `Saved for ${workspace.credentials.username_hint}` : "Add access when the demo needs sign-in."}
+                        {workspace.credentials?.kind === "password"
+                          ? `Saved for ${workspace.credentials.username_hint}`
+                          : "Add access when the demo needs sign-in."}
                       </p>
                     </div>
                   </div>
                   <div className="mt-5 space-y-3">
-                    <Input value={loginUrl} onChange={(event) => setLoginUrl(event.target.value)} placeholder="Login URL, if the demo needs sign-in" className="bg-background" />
-                    <Input value={username} onChange={(event) => setUsername(event.target.value)} placeholder="Email or username" className="bg-background" />
-                    <Input value={secret} onChange={(event) => setSecret(event.target.value)} placeholder="Password or access code" type="password" className="bg-background" />
+                    <Input
+                      value={loginUrl}
+                      onChange={(event) => setLoginUrl(event.target.value)}
+                      placeholder="Login URL, if the demo needs sign-in"
+                      className="bg-background"
+                    />
+                    <Input
+                      value={username}
+                      onChange={(event) => setUsername(event.target.value)}
+                      placeholder="Email or username"
+                      className="bg-background"
+                    />
+                    <Input
+                      value={secret}
+                      onChange={(event) => setSecret(event.target.value)}
+                      placeholder="Password or access code"
+                      type="password"
+                      className="bg-background"
+                    />
                     <Button onClick={handleSaveCredentials} disabled={busyAction === "creds"}>
                       {busyAction === "creds" ? <Loader2 className="animate-spin" /> : <Save />}
                       Save access
@@ -355,11 +477,18 @@ function ProjectStudio() {
                     </span>
                     <div>
                       <h2 className="font-semibold">Demo brief</h2>
-                      <p className="text-sm text-muted-foreground">Queue a real-browser run for a video up to 69 seconds.</p>
+                      <p className="text-sm text-muted-foreground">
+                        Queue a real-browser run for a video up to 69 seconds.
+                      </p>
                     </div>
                   </div>
                   <div className="mt-5 space-y-3">
-                    <Input value={demoTitle} onChange={(event) => setDemoTitle(event.target.value)} placeholder="Demo title" className="bg-background" />
+                    <Input
+                      value={demoTitle}
+                      onChange={(event) => setDemoTitle(event.target.value)}
+                      placeholder="Demo title"
+                      className="bg-background"
+                    />
                     <Textarea
                       value={featurePrompt}
                       onChange={(event) => setFeaturePrompt(event.target.value)}
@@ -378,7 +507,9 @@ function ProjectStudio() {
             <section className="mt-8">
               <div className="mb-4 flex items-center justify-between gap-4">
                 <h2 className="text-xl font-semibold">Demo queue</h2>
-                <span className="text-sm text-muted-foreground">{workspace.demos.length} total</span>
+                <span className="text-sm text-muted-foreground">
+                  {workspace.demos.length} total
+                </span>
               </div>
               {workspace.demos.length === 0 ? (
                 <div className="rounded-lg border border-dashed border-border bg-card/50 p-8 text-center text-sm text-muted-foreground">
@@ -386,8 +517,12 @@ function ProjectStudio() {
                 </div>
               ) : (
                 <div className="grid gap-3">
-                  {workspace.demos.map((demo) => (
-                    <DemoRow key={demo.id} demo={demo} />
+                  {workspace.demos.map((demo: Demo) => (
+                    <DemoRow
+                      key={demo.id}
+                      demo={demo}
+                      onRetryFinalization={handleRetryFinalization}
+                    />
                   ))}
                 </div>
               )}
@@ -399,12 +534,24 @@ function ProjectStudio() {
   );
 }
 
-
-function DemoRow({ demo }: { demo: Demo }) {
-  const videoUrl = demo.mp4_url ?? demo.recording_url ?? null;
-  const isLive = demo.status === "starting" || demo.status === "recording";
-  const isReady = demo.status === "ready" && Boolean(videoUrl);
-  const liveUrl = isLive ? (demo.live_view_url ?? demo.session_viewer_url) : null;
+function DemoRow({
+  demo,
+  onRetryFinalization,
+}: {
+  demo: Demo;
+  onRetryFinalization: (demoId: string) => void;
+}) {
+  const { videoUrl, isLive, isReady, liveUrl } = getDemoPlaybackState(demo);
+  const downloadUrl = demo.recording_object_path ? stableRecordingUrl(demo.id, true) : videoUrl;
+  const canRetryFinalization =
+    demo.status === "failed" &&
+    Boolean(demo.steel_session_id) &&
+    Boolean(
+      demo.error_code &&
+      /(FINAL|HLS|MP4|SEGMENT|UPLOAD|SIGNED_URL|PLAYBACK|RECORDING_UNAVAILABLE)/i.test(
+        demo.error_code,
+      ),
+    );
   return (
     <article className="rounded-lg border border-border bg-card p-4">
       <div className="grid gap-4 md:grid-cols-[1fr_360px] md:items-start">
@@ -437,7 +584,7 @@ function DemoRow({ demo }: { demo: Demo }) {
               className="mt-3 inline-flex items-center gap-1.5 text-xs font-semibold text-primary hover:underline"
             >
               <ExternalLink className="h-3.5 w-3.5" />
-              {isLive ? "Open live session in new tab" : "Open session replay"}
+              {isLive ? "Open live session in new tab" : "Open Steel replay diagnostics"}
             </a>
           ) : null}
         </div>
@@ -445,19 +592,28 @@ function DemoRow({ demo }: { demo: Demo }) {
           {isReady && videoUrl ? (
             <>
               <video
+                key={videoUrl}
                 src={videoUrl}
                 controls
                 playsInline
                 preload="metadata"
                 className="aspect-video w-full rounded-md border border-border bg-black"
               />
-              <Button asChild variant="outline" size="sm">
-                <a href={videoUrl} download={`${demo.title.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}.mp4`}>
-                  <Download />
-                  Download MP4
-                  {demo.duration_seconds ? ` (${demo.duration_seconds}s)` : ""}
-                </a>
-              </Button>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <Button asChild variant="outline" size="sm">
+                  <a href={downloadUrl ?? videoUrl} download={safeRecordingFilename(demo.title)}>
+                    <Download />
+                    Download MP4
+                    {demo.duration_seconds ? ` (${demo.duration_seconds}s)` : ""}
+                  </a>
+                </Button>
+                <Button asChild variant="outline" size="sm">
+                  <a href={videoUrl} target="_blank" rel="noopener noreferrer">
+                    <ExternalLink />
+                    Open / share
+                  </a>
+                </Button>
+              </div>
             </>
           ) : liveUrl ? (
             <iframe
@@ -469,9 +625,24 @@ function DemoRow({ demo }: { demo: Demo }) {
             />
           ) : (
             <div className="flex aspect-video w-full items-center justify-center rounded-md border border-border bg-background text-muted-foreground">
-              {demo.status === "rendering" || isLive ? <Loader2 className="h-6 w-6 animate-spin" /> : <Film className="h-7 w-7" />}
+              {demo.status === "rendering" || isLive ? (
+                <Loader2 className="h-6 w-6 animate-spin" />
+              ) : (
+                <Film className="h-7 w-7" />
+              )}
             </div>
           )}
+          {canRetryFinalization ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => onRetryFinalization(demo.id)}
+            >
+              <RefreshCw />
+              Retry video finalization
+            </Button>
+          ) : null}
         </div>
       </div>
     </article>

@@ -1,49 +1,36 @@
-import { createCipheriv, createDecipheriv, createHash, randomBytes } from "crypto";
 import { createServerFn } from "@tanstack/react-start";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
 
-import type { Json } from "@/integrations/supabase/types";
+import type { Database, Json } from "@/integrations/supabase/types";
 
+import {
+  decryptProjectCredentials,
+  encryptProjectCredentials,
+  isSameOriginUrl,
+  maskCredentialIdentifier,
+} from "./credential-crypto.server";
 import { normalizePublicUrl, scanWebsite } from "./studio-scanner.server";
+import {
+  recordingObjectPath,
+  storeRecordingArtifact,
+  type RecordingStorageClient,
+} from "./recording-storage.server";
 import {
   createSteelSession,
   fetchSessionMp4,
+  getSteelSession,
   releaseSteelSession,
   runScenesOverCdp,
+  SteelRecordingError,
+  type CdpAction,
   type DecryptedCredentials,
 } from "./steel-recorder.server";
 import { outlineToMarkdown, reconSite, type ReconResult } from "./steel-recon.server";
 import { planDemoScenes } from "./scene-planner.server";
+import { stableRecordingUrl } from "./demo-state";
 
-function deriveCredsKey(): Buffer {
-  const keySecret = process.env.WISEDEMO_CREDS_KEY ?? process.env.DEMOFORGE_CREDS_KEY;
-  if (!keySecret || keySecret.length < 32) {
-    throw new Error("Credential encryption is not configured yet.");
-  }
-  return /^[\da-f]{64}$/i.test(keySecret)
-    ? Buffer.from(keySecret, "hex")
-    : createHash("sha256").update(keySecret, "utf8").digest();
-}
-
-function decryptCredentials(ciphertext: string): DecryptedCredentials {
-  try {
-    const [ivB64, tagB64, dataB64] = ciphertext.split(".");
-    if (!ivB64 || !tagB64 || !dataB64) return null;
-    const key = deriveCredsKey();
-    const decipher = createDecipheriv("aes-256-gcm", key, Buffer.from(ivB64, "base64"));
-    decipher.setAuthTag(Buffer.from(tagB64, "base64"));
-    const plaintext = Buffer.concat([
-      decipher.update(Buffer.from(dataB64, "base64")),
-      decipher.final(),
-    ]).toString("utf8");
-    const parsed = JSON.parse(plaintext) as DecryptedCredentials;
-    return parsed;
-  } catch {
-    return null;
-  }
-}
-
-type SupabaseCtx = { supabase: { from: (table: string) => any }; userId: string };
+type SupabaseCtx = { supabase: SupabaseClient<Database>; userId: string };
 
 // Authentication was removed for the experimental stage: every visitor works in
 // one shared workspace, and all database access goes through the service-role
@@ -52,7 +39,7 @@ export const SHARED_WORKSPACE_OWNER = "00000000-0000-0000-0000-000000000001";
 
 async function workspaceContext(): Promise<SupabaseCtx> {
   const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-  return { supabase: supabaseAdmin as unknown as SupabaseCtx["supabase"], userId: SHARED_WORKSPACE_OWNER };
+  return { supabase: supabaseAdmin, userId: SHARED_WORKSPACE_OWNER };
 }
 
 async function loadCredentials(
@@ -68,7 +55,7 @@ async function loadCredentials(
     .maybeSingle();
 
   const credentials =
-    row?.kind === "password" && row.ciphertext ? decryptCredentials(row.ciphertext) : null;
+    row?.kind === "password" && row.ciphertext ? decryptProjectCredentials(row.ciphertext) : null;
   return { credentials, loginUrl: row?.login_url ?? null };
 }
 
@@ -151,9 +138,60 @@ export type DemoRecord = {
   live_view_url: string | null;
   session_viewer_url: string | null;
   recording_url: string | null;
+  recording_object_path: string | null;
+  recording_completed_at: string | null;
+  error_code: string | null;
   error_message: string | null;
   created_at: string;
 };
+
+const DEMO_SELECT =
+  "id, title, feature_prompt, scene_script, status, progress_pct, current_step, mp4_url, thumbnail_url, duration_seconds, steel_session_id, live_view_url, session_viewer_url, recording_url, recording_object_path, recording_completed_at, error_code, error_message, created_at";
+
+function withDurableRecordingUrl<T extends { id: string; status: string }>(
+  demo: T,
+): T & { mp4_url?: string; recording_url?: string } {
+  const objectPath = (demo as T & { recording_object_path?: string | null }).recording_object_path;
+  if (demo.status !== "ready" || !objectPath) return demo;
+  const url = stableRecordingUrl(demo.id);
+  return { ...demo, mp4_url: url, recording_url: url };
+}
+
+async function appendDemoEvent(
+  context: SupabaseCtx,
+  demoId: string,
+  level: "info" | "warn" | "error",
+  step: string,
+  message: string,
+): Promise<void> {
+  const safeMessage = message.slice(0, 1_000);
+  const { error } = await context.supabase.from("demo_events").insert({
+    demo_id: demoId,
+    owner_id: context.userId,
+    level,
+    step,
+    message: safeMessage,
+  });
+  if (error) {
+    console.error("[WiseDemo] demo event insert failed", {
+      demoId,
+      step,
+      code: error.code,
+    });
+  }
+  const logger = level === "error" ? console.error : level === "warn" ? console.warn : console.info;
+  logger("[WiseDemo] demo event", { demoId, level, step, message: safeMessage });
+}
+
+function publicSceneAction(action: CdpAction): Json {
+  if (action.type === "type") {
+    return { ...action, text: "[redacted input]" } as Json;
+  }
+  if (action.type === "eval") {
+    return { type: "eval", expression: "[redacted expression]" } as Json;
+  }
+  return action as unknown as Json;
+}
 
 export const listProjects = createServerFn({ method: "GET" }).handler(async () => {
   const context = await workspaceContext();
@@ -164,7 +202,6 @@ export const listProjects = createServerFn({ method: "GET" }).handler(async () =
   if (error) throw new Error(error.message);
   return (data ?? []) as ProjectListItem[];
 });
-
 
 export const getProjectWorkspace = createServerFn({ method: "GET" })
   .inputValidator((data) =>
@@ -178,7 +215,9 @@ export const getProjectWorkspace = createServerFn({ method: "GET" })
     const context = await workspaceContext();
     const { data: project, error: projectError } = await context.supabase
       .from("projects")
-      .select("id, name, base_url, description, site_map_md, site_map_source, site_map_updated_at, created_at")
+      .select(
+        "id, name, base_url, description, site_map_md, site_map_source, site_map_updated_at, created_at",
+      )
       .eq("id", data.projectId)
       .maybeSingle();
 
@@ -187,7 +226,7 @@ export const getProjectWorkspace = createServerFn({ method: "GET" })
 
     const { data: demos, error: demosError } = await context.supabase
       .from("demos")
-      .select("id, title, feature_prompt, scene_script, status, progress_pct, current_step, mp4_url, thumbnail_url, duration_seconds, steel_session_id, live_view_url, session_viewer_url, recording_url, error_message, created_at")
+      .select(DEMO_SELECT)
       .eq("project_id", data.projectId)
       .order("created_at", { ascending: false });
 
@@ -208,14 +247,19 @@ export const getProjectWorkspace = createServerFn({ method: "GET" })
         .eq("project_id", data.projectId)
         .eq("owner_id", context.userId)
         .maybeSingle();
-      credentials = credentialMeta ?? null;
+      credentials = credentialMeta
+        ? {
+            ...credentialMeta,
+            username_hint: maskCredentialIdentifier(credentialMeta.username_hint),
+          }
+        : null;
     } catch {
       credentials = null;
     }
 
     return {
       project: project as ProjectRecord,
-      demos: (demos ?? []) as DemoRecord[],
+      demos: (demos ?? []).map((demo: DemoRecord) => withDurableRecordingUrl(demo)),
       credentials,
     };
   });
@@ -240,7 +284,11 @@ export const scanProjectSite = createServerFn({ method: "POST" })
     if (existingError) throw new Error(existingError.message);
     if (!existing) throw new Error("Project not found.");
 
-    const { credentials, loginUrl } = await loadCredentials(context, data.projectId, context.userId);
+    const { credentials, loginUrl } = await loadCredentials(
+      context,
+      data.projectId,
+      context.userId,
+    );
 
     // Agentic pass first: a real browser opens the product (signing in when
     // credentials exist) and reads the actual DOM.
@@ -263,7 +311,14 @@ export const scanProjectSite = createServerFn({ method: "POST" })
           description = recon.pages[0]?.headings[0] ?? null;
         }
       }
-    } catch {
+    } catch (scanError) {
+      if (credentials) {
+        throw new Error(
+          scanError instanceof Error && scanError.message.includes("credential")
+            ? scanError.message
+            : "Authenticated product scan failed. Check the stored access and login URL.",
+        );
+      }
       siteMapMd = null;
     } finally {
       if (sessionId) await releaseSteelSession(sessionId).catch(() => null);
@@ -285,7 +340,9 @@ export const scanProjectSite = createServerFn({ method: "POST" })
       })
       .eq("id", data.projectId)
       .eq("owner_id", context.userId)
-      .select("id, name, base_url, description, site_map_md, site_map_source, site_map_updated_at, created_at")
+      .select(
+        "id, name, base_url, description, site_map_md, site_map_source, site_map_updated_at, created_at",
+      )
       .single();
 
     if (error) throw new Error(error.message);
@@ -314,7 +371,9 @@ export const saveProjectMap = createServerFn({ method: "POST" })
       })
       .eq("id", data.projectId)
       .eq("owner_id", context.userId)
-      .select("id, name, base_url, description, site_map_md, site_map_source, site_map_updated_at, created_at")
+      .select(
+        "id, name, base_url, description, site_map_md, site_map_source, site_map_updated_at, created_at",
+      )
       .single();
 
     if (error) throw new Error(error.message);
@@ -337,7 +396,7 @@ export const saveProjectCredential = createServerFn({ method: "POST" })
     const context = await workspaceContext();
     const { data: project, error: projectError } = await context.supabase
       .from("projects")
-      .select("id")
+      .select("id, base_url")
       .eq("id", data.projectId)
       .eq("owner_id", context.userId)
       .maybeSingle();
@@ -359,7 +418,9 @@ export const saveProjectCredential = createServerFn({ method: "POST" })
       throw new Error("Login URL, username, and secret are required.");
     }
 
-    const candidate = /^https?:\/\//i.test(data.loginUrl) ? data.loginUrl : `https://${data.loginUrl}`;
+    const candidate = /^https?:\/\//i.test(data.loginUrl)
+      ? data.loginUrl
+      : `https://${data.loginUrl}`;
     let loginUrl: URL;
 
     try {
@@ -367,19 +428,18 @@ export const saveProjectCredential = createServerFn({ method: "POST" })
     } catch {
       throw new Error("Enter a valid login URL.");
     }
+    if (
+      !["http:", "https:"].includes(loginUrl.protocol) ||
+      !isSameOriginUrl(loginUrl, project.base_url)
+    ) {
+      throw new Error("The login URL must use the same HTTP(S) origin as the project.");
+    }
 
-    const key = deriveCredsKey();
-    const iv = randomBytes(12);
-    const cipher = createCipheriv("aes-256-gcm", key, iv);
-    const encrypted = Buffer.concat([
-      cipher.update(
-        JSON.stringify({ loginUrl: loginUrl.toString(), username: data.username, secret: data.secret }),
-        "utf8",
-      ),
-      cipher.final(),
-    ]);
-    const tag = cipher.getAuthTag();
-    const ciphertext = [iv.toString("base64"), tag.toString("base64"), encrypted.toString("base64")].join(".");
+    const ciphertext = encryptProjectCredentials({
+      loginUrl: loginUrl.toString(),
+      username: data.username,
+      secret: data.secret,
+    });
 
     const { error } = await context.supabase.from("project_credentials").upsert(
       {
@@ -398,7 +458,7 @@ export const saveProjectCredential = createServerFn({ method: "POST" })
     return {
       kind: "password" as const,
       login_url: loginUrl.toString(),
-      username_hint: data.username,
+      username_hint: maskCredentialIdentifier(data.username),
       updated_at: new Date().toISOString(),
     };
   });
@@ -415,12 +475,14 @@ export const createDemoJob = createServerFn({ method: "POST" })
   )
   .handler(async ({ data }) => {
     const context = await workspaceContext();
-    let { data: project, error: projectError } = await context.supabase
+    const projectResult = await context.supabase
       .from("projects")
       .select("id, name, base_url, description, site_map_md")
       .eq("id", data.projectId)
       .eq("owner_id", context.userId)
       .maybeSingle();
+    let project = projectResult.data;
+    const projectError = projectResult.error;
 
     if (projectError) throw new Error(projectError.message);
     if (!project) throw new Error("Project not found.");
@@ -444,8 +506,7 @@ export const createDemoJob = createServerFn({ method: "POST" })
       project = scannedProject;
     }
 
-    // Insert demo row in "starting" state; the agent plans the shot list once
-    // the real browser has scouted the product.
+    // Queue the durable database record before allocating external resources.
     const { data: demo, error: insertError } = await context.supabase
       .from("demos")
       .insert({
@@ -453,47 +514,80 @@ export const createDemoJob = createServerFn({ method: "POST" })
         owner_id: context.userId,
         title: data.title,
         feature_prompt: data.featurePrompt,
-        status: "starting",
+        status: "pending",
         progress_pct: 5,
-        current_step: "Booting real cloud browser on Steel.dev\u2026",
+        current_step: "Queued for a real cloud-browser recording\u2026",
         thumbnail_url: `/api/public/screenshot?url=${encodeURIComponent(project.base_url)}&width=1280`,
       })
-      .select("id, title, feature_prompt, scene_script, status, progress_pct, current_step, mp4_url, thumbnail_url, duration_seconds, steel_session_id, live_view_url, session_viewer_url, recording_url, error_message, created_at")
+      .select(DEMO_SELECT)
       .single();
 
     if (insertError) throw new Error(insertError.message);
+    await appendDemoEvent(
+      context,
+      demo.id,
+      "info",
+      "DEMO_QUEUED",
+      "Demo job created in the shared recording queue.",
+    );
 
-    // Create Steel session synchronously so we can return the live URL fast
+    // Create the Steel session synchronously so the studio can expose its live
+    // viewer while the resumable execution request begins.
     try {
       const session = await createSteelSession(project.base_url);
 
-      await context.supabase
+      const { error: sessionUpdateError } = await context.supabase
         .from("demos")
         .update({
-          status: "recording",
-          progress_pct: 25,
-          current_step: "Real browser session live \u2014 driving the site\u2026",
+          status: "scanning",
+          progress_pct: 15,
+          current_step: "Real browser session live \u2014 scouting the product\u2026",
           steel_session_id: session.id,
           live_view_url: session.liveViewUrl ?? session.debugUrl ?? null,
           session_viewer_url: session.sessionViewerUrl ?? null,
         })
         .eq("id", demo.id);
 
-      return {
+      if (sessionUpdateError) {
+        await releaseSteelSession(session.id).catch(() => undefined);
+        throw new Error(sessionUpdateError.message);
+      }
+      await appendDemoEvent(
+        context,
+        demo.id,
+        "info",
+        "STEEL_SESSION_CREATED",
+        "Steel browser session created with recording enabled.",
+      );
+
+      return withDurableRecordingUrl({
         ...demo,
-        status: "recording" as const,
-        progress_pct: 25,
-        current_step: "Real browser session live \u2014 driving the site\u2026",
+        status: "scanning" as const,
+        progress_pct: 15,
+        current_step: "Real browser session live \u2014 scouting the product\u2026",
         steel_session_id: session.id,
         live_view_url: session.liveViewUrl ?? session.debugUrl ?? null,
         session_viewer_url: session.sessionViewerUrl ?? null,
-      };
+      });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to start Steel session.";
       await context.supabase
         .from("demos")
-        .update({ status: "failed", progress_pct: 0, current_step: message, error_message: message })
+        .update({
+          status: "failed",
+          progress_pct: 0,
+          current_step: "Could not start the cloud browser.",
+          error_code: "STEEL_SESSION_CREATE_FAILED",
+          error_message: message,
+        })
         .eq("id", demo.id);
+      await appendDemoEvent(
+        context,
+        demo.id,
+        "error",
+        "STEEL_SESSION_CREATE_FAILED",
+        "Steel browser session could not be created.",
+      );
       throw new Error(message);
     }
   });
@@ -506,13 +600,62 @@ export const runDemoScenes = createServerFn({ method: "POST" })
     const context = await workspaceContext();
     const { data: demo, error } = await context.supabase
       .from("demos")
-      .select("id, steel_session_id, feature_prompt, project_id")
+      .select(
+        "id, status, steel_session_id, session_viewer_url, feature_prompt, project_id, execution_attempts, execution_started_at, recording_object_path, mp4_url, recording_url",
+      )
       .eq("id", data.demoId)
       .eq("owner_id", context.userId)
       .maybeSingle();
 
     if (error) throw new Error(error.message);
-    if (!demo || !demo.steel_session_id) throw new Error("No active Steel session for this demo.");
+    if (!demo) throw new Error("Demo not found.");
+    if (["rendering", "ready", "failed"].includes(demo.status)) {
+      return withDurableRecordingUrl(demo);
+    }
+    if (!demo.steel_session_id) {
+      const message = "No active Steel session exists for this demo.";
+      await context.supabase
+        .from("demos")
+        .update({
+          status: "failed",
+          progress_pct: 0,
+          current_step: message,
+          error_code: "MISSING_STEEL_SESSION",
+          error_message: message,
+        })
+        .eq("id", demo.id);
+      await appendDemoEvent(context, demo.id, "error", "MISSING_STEEL_SESSION", message);
+      throw new Error(message);
+    }
+
+    const now = new Date();
+    const staleBefore = new Date(now.getTime() - 2 * 60_000).toISOString();
+    const { data: claimed, error: claimError } = await context.supabase
+      .from("demos")
+      .update({
+        status: "scanning",
+        progress_pct: 20,
+        current_step: "Agent scouting the product\u2026",
+        execution_started_at: now.toISOString(),
+        execution_attempts: (demo.execution_attempts ?? 0) + 1,
+        error_code: null,
+        error_message: null,
+      })
+      .eq("id", demo.id)
+      .in("status", ["pending", "starting", "scanning", "planning", "recording"])
+      .or(`execution_started_at.is.null,execution_started_at.lt.${staleBefore}`)
+      .select("id")
+      .maybeSingle();
+    if (claimError) throw new Error(claimError.message);
+    if (!claimed) return withDurableRecordingUrl(demo);
+
+    await appendDemoEvent(
+      context,
+      demo.id,
+      "info",
+      "RECON_STARTED",
+      "Product recon started in the Steel browser.",
+    );
 
     const { data: project } = await context.supabase
       .from("projects")
@@ -521,23 +664,23 @@ export const runDemoScenes = createServerFn({ method: "POST" })
       .maybeSingle();
     if (!project) throw new Error("Project not found.");
 
-    const { credentials, loginUrl } = await loadCredentials(context, demo.project_id, context.userId);
-
-    const session = await (
-      await import("./steel-recorder.server")
-    ).getSteelSession(demo.steel_session_id);
-    const websocketUrl =
-      session && typeof session.websocketUrl === "string" ? session.websocketUrl : null;
-    if (!websocketUrl) throw new Error("Cloud browser session is no longer available.");
-
-    await context.supabase
-      .from("demos")
-      .update({ progress_pct: 20, current_step: "Agent scouting the product\u2026" })
-      .eq("id", demo.id);
-
-    let recon: ReconResult | null = null;
+    const { credentials, loginUrl } = await loadCredentials(
+      context,
+      demo.project_id,
+      context.userId,
+    );
+    let releaseAttempted = false;
     try {
-      recon = await reconSite({
+      const session = await getSteelSession(demo.steel_session_id);
+      const websocketUrl =
+        session && typeof session.websocketUrl === "string" ? session.websocketUrl : null;
+      if (!websocketUrl) {
+        throw Object.assign(new Error("Cloud browser session is no longer available."), {
+          code: "MISSING_STEEL_SESSION",
+        });
+      }
+
+      const recon: ReconResult = await reconSite({
         websocketUrl,
         baseUrl: project.base_url,
         loginUrl,
@@ -555,130 +698,373 @@ export const runDemoScenes = createServerFn({ method: "POST" })
           .eq("id", project.id)
           .eq("owner_id", context.userId);
       }
-    } catch {
-      recon = null;
-    }
 
-    await context.supabase
-      .from("demos")
-      .update({ progress_pct: 40, current_step: "AI writing the shot list\u2026" })
-      .eq("id", demo.id);
+      await context.supabase
+        .from("demos")
+        .update({
+          status: "planning",
+          progress_pct: 40,
+          current_step: "AI writing a verifiable shot list\u2026",
+        })
+        .eq("id", demo.id);
+      await appendDemoEvent(
+        context,
+        demo.id,
+        "info",
+        "PLANNING_STARTED",
+        "Scene planning started from real recon data.",
+      );
 
-    const plan = await planDemoScenes({
-      productName: project.name,
-      baseUrl: project.base_url,
-      featurePrompt: demo.feature_prompt,
-      siteMapMd: project.site_map_md,
-      recon,
-      loginUrl,
-      credentials: credentials ? { username: credentials.username, secret: credentials.secret } : null,
-    });
+      const plan = await planDemoScenes({
+        productName: project.name,
+        baseUrl: project.base_url,
+        featurePrompt: demo.feature_prompt,
+        siteMapMd: project.site_map_md,
+        recon,
+        loginUrl,
+      });
+      if (!plan.scenes.length) {
+        throw Object.assign(new Error("Scene planner returned no executable actions."), {
+          code: "EMPTY_SCENE_PLAN",
+        });
+      }
 
-    const sceneScript = plan.scenes.map((scene, index) => ({
-      seconds: `${index * 5}-${(index + 1) * 5}`,
-      shot: scene.narration || `Action: ${scene.action.type}`,
-      action: scene.action,
-    }));
+      const sceneScript = plan.scenes.map((scene, index) => ({
+        seconds: `${index * 5}-${(index + 1) * 5}`,
+        shot: scene.narration || `Action: ${scene.action.type}`,
+        action: publicSceneAction(scene.action),
+      }));
+      await context.supabase
+        .from("demos")
+        .update({
+          status: "recording",
+          progress_pct: 55,
+          current_step: "Recording the real product walkthrough\u2026",
+          scene_script: sceneScript,
+        })
+        .eq("id", demo.id);
+      await appendDemoEvent(
+        context,
+        demo.id,
+        "info",
+        "RECORDING_STARTED",
+        `${plan.scenes.length} planned browser actions are ready to execute.`,
+      );
 
-    await context.supabase
-      .from("demos")
-      .update({
-        status: "recording",
-        progress_pct: 55,
-        current_step: "Recording the real product walkthrough\u2026",
-        scene_script: sceneScript,
-      })
-      .eq("id", demo.id);
-
-    let result: { executed: number; error?: string };
-    try {
-      result = await runScenesOverCdp(
+      const result = await runScenesOverCdp(
         websocketUrl,
         plan.scenes.map((scene) => scene.action),
-        55000,
+        90_000,
       );
-    } catch (err) {
-      result = { executed: 0, error: err instanceof Error ? err.message : String(err) };
+      for (const diagnostic of result.diagnostics) {
+        await appendDemoEvent(
+          context,
+          demo.id,
+          diagnostic.success ? "info" : "error",
+          diagnostic.code,
+          `Action ${diagnostic.index + 1} (${diagnostic.type}): ${diagnostic.message}`,
+        );
+      }
+      if (!result.completed) {
+        throw Object.assign(
+          new Error(result.error ?? "Not every planned browser action completed."),
+          { code: "CDP_ACTION_FAILED" },
+        );
+      }
+
+      releaseAttempted = true;
+      const released = await releaseSteelSession(demo.steel_session_id);
+      await appendDemoEvent(
+        context,
+        demo.id,
+        "info",
+        "STEEL_SESSION_RELEASED",
+        "Steel browser session released; recording finalization can begin.",
+      );
+
+      const { data: updated, error: updateError } = await context.supabase
+        .from("demos")
+        .update({
+          status: "rendering",
+          progress_pct: 80,
+          current_step: "Waiting for Steel to finalize the video stream\u2026",
+          session_viewer_url: released.sessionViewerUrl ?? demo.session_viewer_url ?? null,
+          live_view_url: null,
+          execution_started_at: null,
+          error_code: null,
+          error_message: null,
+        })
+        .eq("id", demo.id)
+        .select(DEMO_SELECT)
+        .single();
+      if (updateError) throw new Error(updateError.message);
+      return withDurableRecordingUrl(updated);
+    } catch (runError) {
+      if (!releaseAttempted) {
+        releaseAttempted = true;
+        await releaseSteelSession(demo.steel_session_id).catch(() => undefined);
+      }
+      const code =
+        runError && typeof runError === "object" && "code" in runError
+          ? String(runError.code)
+          : credentials
+            ? "LOGIN_OR_RECON_FAILED"
+            : "RECORDING_EXECUTION_FAILED";
+      const message = runError instanceof Error ? runError.message : "Recording execution failed.";
+      const { data: failed, error: failedError } = await context.supabase
+        .from("demos")
+        .update({
+          status: "failed",
+          progress_pct: 0,
+          current_step: "Recording failed before media finalization.",
+          live_view_url: null,
+          execution_started_at: null,
+          error_code: code,
+          error_message: message,
+        })
+        .eq("id", demo.id)
+        .select(DEMO_SELECT)
+        .single();
+      if (failedError) throw new Error(failedError.message);
+      await appendDemoEvent(context, demo.id, "error", code, message);
+      return withDurableRecordingUrl(failed);
     }
-
-    // Release session; grab replay URL
-    const released = await releaseSteelSession(demo.steel_session_id);
-
-    const { data: updated } = await context.supabase
-      .from("demos")
-      .update({
-        status: result.executed === 0 ? "failed" : "rendering",
-        progress_pct: result.executed === 0 ? 0 : 80,
-        current_step:
-          result.executed === 0
-            ? `Recording failed: ${result.error ?? "no actions ran"}`
-            : "Encoding the MP4\u2026",
-        session_viewer_url: released?.sessionViewerUrl ?? null,
-        live_view_url: null,
-        error_message: result.executed === 0 ? (result.error ?? "No actions ran.") : null,
-      })
-      .eq("id", demo.id)
-      .select("id, status, progress_pct, current_step, session_viewer_url, live_view_url, mp4_url, recording_url, error_message")
-      .single();
-
-    return updated;
   });
 
-// Pull the finalized MP4 out of Steel, store it in Cloud storage, and expose a
-// long-lived signed URL the browser can play and download.
+// Poll Steel's authenticated HLS recording, validate the complete fragmented
+// MP4, upload it once at a deterministic path, and publish only a stable app URL.
 export const finalizeDemoRecording = createServerFn({ method: "POST" })
   .inputValidator((data) => z.object({ demoId: z.string().uuid() }).parse(data))
   .handler(async ({ data }) => {
     const context = await workspaceContext();
     const { data: demo, error } = await context.supabase
       .from("demos")
-      .select("id, steel_session_id, project_id")
+      .select(
+        "id, status, steel_session_id, recording_object_path, finalization_attempts, finalization_started_at, mp4_url, recording_url",
+      )
       .eq("id", data.demoId)
       .eq("owner_id", context.userId)
       .maybeSingle();
     if (error) throw new Error(error.message);
-    if (!demo?.steel_session_id) throw new Error("This demo has no recording session.");
-
-    const recording = await fetchSessionMp4(demo.steel_session_id, { attempts: 5, waitMs: 4000 });
-
-    if (!recording) {
-      const { data: pending } = await context.supabase
+    if (!demo) throw new Error("Demo not found.");
+    if (demo.status === "ready" && demo.recording_object_path) {
+      return withDurableRecordingUrl(demo);
+    }
+    if (demo.status !== "rendering") return withDurableRecordingUrl(demo);
+    if (!demo.steel_session_id) {
+      const message = "The recording cannot be finalized because its Steel session is missing.";
+      const { data: failed, error: failedError } = await context.supabase
         .from("demos")
-        .update({ current_step: "Waiting for the recording to finish encoding\u2026" })
+        .update({
+          status: "failed",
+          progress_pct: 0,
+          current_step: message,
+          error_code: "MISSING_STEEL_SESSION",
+          error_message: message,
+          finalization_started_at: null,
+        })
         .eq("id", demo.id)
-        .select("id, status, progress_pct, current_step, mp4_url, recording_url, error_message")
+        .select(DEMO_SELECT)
         .single();
-      return pending;
+      if (failedError) throw new Error(failedError.message);
+      await appendDemoEvent(context, demo.id, "error", "MISSING_STEEL_SESSION", message);
+      return withDurableRecordingUrl(failed);
     }
 
-    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-    const path = `${context.userId}/${demo.id}.mp4`;
-    const upload = await supabaseAdmin.storage
-      .from("demo-recordings")
-      .upload(path, recording.bytes, { contentType: "video/mp4", upsert: true });
-    if (upload.error) throw new Error(upload.error.message);
-
-    const signed = await supabaseAdmin.storage
-      .from("demo-recordings")
-      .createSignedUrl(path, 60 * 60 * 24 * 365);
-    const url = signed.data?.signedUrl ?? null;
-
-    const { data: updated } = await context.supabase
+    const now = new Date();
+    const attemptNumber = (demo.finalization_attempts ?? 0) + 1;
+    const staleBefore = new Date(now.getTime() - 90_000).toISOString();
+    const { data: claimed, error: claimError } = await context.supabase
       .from("demos")
       .update({
-        status: "ready",
-        progress_pct: 100,
-        current_step: "Demo ready \u2014 real recording of your product.",
-        mp4_url: url,
-        recording_url: url,
-        duration_seconds: recording.durationSeconds,
+        finalization_started_at: now.toISOString(),
+        finalization_attempts: attemptNumber,
+        current_step: "Checking Steel for a finalized recording\u2026",
+        error_code: null,
         error_message: null,
       })
       .eq("id", demo.id)
-      .select("id, status, progress_pct, current_step, mp4_url, recording_url, duration_seconds, error_message")
-      .single();
+      .eq("status", "rendering")
+      .or(`finalization_started_at.is.null,finalization_started_at.lt.${staleBefore}`)
+      .select("id")
+      .maybeSingle();
+    if (claimError) throw new Error(claimError.message);
+    if (!claimed) return withDurableRecordingUrl(demo);
 
-    return updated;
+    await appendDemoEvent(
+      context,
+      demo.id,
+      "info",
+      "FINALIZATION_ATTEMPT",
+      `Recording finalization attempt ${attemptNumber} started.`,
+    );
+
+    try {
+      const recording = await fetchSessionMp4(demo.steel_session_id, {
+        attempts: 4,
+        initialWaitMs: 1_000,
+        maxWaitMs: 4_000,
+      });
+
+      if (!recording) {
+        const { data: pending, error: pendingError } = await context.supabase
+          .from("demos")
+          .update({
+            current_step: "Steel is still finalizing the recording; WiseDemo will retry\u2026",
+            finalization_started_at: null,
+            error_code: null,
+            error_message: null,
+          })
+          .eq("id", demo.id)
+          .eq("status", "rendering")
+          .select(DEMO_SELECT)
+          .single();
+        if (pendingError) throw new Error(pendingError.message);
+        await appendDemoEvent(
+          context,
+          demo.id,
+          "info",
+          "STEEL_RECORDING_NOT_READY",
+          "Steel has not published a finalized HLS playlist yet; retry remains safe.",
+        );
+        return withDurableRecordingUrl(pending);
+      }
+
+      const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+      const path = recordingObjectPath(context.userId, demo.id);
+      await storeRecordingArtifact({
+        storage: supabaseAdmin.storage as unknown as RecordingStorageClient,
+        path,
+        bytes: recording.bytes,
+      });
+
+      const url = stableRecordingUrl(demo.id);
+      const completedAt = new Date().toISOString();
+      const { data: updated, error: updateError } = await context.supabase
+        .from("demos")
+        .update({
+          status: "ready",
+          progress_pct: 100,
+          current_step: "Demo ready \u2014 playable recording stored successfully.",
+          mp4_url: url,
+          recording_url: url,
+          recording_object_path: path,
+          recording_completed_at: completedAt,
+          duration_seconds: recording.durationSeconds,
+          finalization_started_at: null,
+          error_code: null,
+          error_message: null,
+        })
+        .eq("id", demo.id)
+        .eq("status", "rendering")
+        .select(DEMO_SELECT)
+        .single();
+      if (updateError) throw new Error(updateError.message);
+      await appendDemoEvent(
+        context,
+        demo.id,
+        "info",
+        "RECORDING_READY",
+        "Validated MP4 uploaded and its signed playback URL verified.",
+      );
+      return withDurableRecordingUrl(updated);
+    } catch (finalizeError) {
+      const structured = finalizeError as {
+        code?: unknown;
+        retryable?: unknown;
+        message?: unknown;
+      };
+      const code =
+        finalizeError instanceof SteelRecordingError
+          ? finalizeError.code
+          : typeof structured.code === "string"
+            ? structured.code
+            : "RECORDING_FINALIZATION_FAILED";
+      const retryable =
+        finalizeError instanceof SteelRecordingError
+          ? finalizeError.retryable
+          : structured.retryable === true;
+      const message =
+        finalizeError instanceof Error
+          ? finalizeError.message
+          : "Recording finalization failed unexpectedly.";
+      const exhausted = retryable && attemptNumber >= 6;
+      const status = retryable && !exhausted ? "rendering" : "failed";
+      const { data: updated, error: failureUpdateError } = await context.supabase
+        .from("demos")
+        .update({
+          status,
+          progress_pct: status === "rendering" ? 80 : 0,
+          current_step:
+            status === "rendering"
+              ? "Video finalization hit a temporary error; WiseDemo will retry."
+              : "Video finalization failed and needs attention.",
+          finalization_started_at: null,
+          error_code: exhausted ? `${code}_RETRY_LIMIT` : code,
+          error_message: message,
+        })
+        .eq("id", demo.id)
+        .select(DEMO_SELECT)
+        .single();
+      if (failureUpdateError) throw new Error(failureUpdateError.message);
+      await appendDemoEvent(
+        context,
+        demo.id,
+        status === "rendering" ? "warn" : "error",
+        exhausted ? `${code}_RETRY_LIMIT` : code,
+        message,
+      );
+      return withDurableRecordingUrl(updated);
+    }
+  });
+
+export const retryDemoFinalization = createServerFn({ method: "POST" })
+  .inputValidator((data) => z.object({ demoId: z.string().uuid() }).parse(data))
+  .handler(async ({ data }) => {
+    const context = await workspaceContext();
+    const { data: demo, error } = await context.supabase
+      .from("demos")
+      .select("id, status, steel_session_id, recording_object_path, error_code")
+      .eq("id", data.demoId)
+      .eq("owner_id", context.userId)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    if (!demo) throw new Error("Demo not found.");
+    if (demo.status === "ready" && demo.recording_object_path) {
+      return withDurableRecordingUrl(demo);
+    }
+    const retryableCode = Boolean(
+      demo.error_code &&
+      /(FINAL|HLS|MP4|SEGMENT|UPLOAD|SIGNED_URL|PLAYBACK|RECORDING_UNAVAILABLE)/i.test(
+        demo.error_code,
+      ),
+    );
+    if (demo.status !== "failed" || !demo.steel_session_id || !retryableCode) {
+      throw new Error("This demo does not have a retryable recording finalization.");
+    }
+    const { data: rendering, error: updateError } = await context.supabase
+      .from("demos")
+      .update({
+        status: "rendering",
+        progress_pct: 80,
+        current_step: "Retrying video finalization\u2026",
+        finalization_attempts: 0,
+        finalization_started_at: null,
+        error_code: null,
+        error_message: null,
+      })
+      .eq("id", demo.id)
+      .select(DEMO_SELECT)
+      .single();
+    if (updateError) throw new Error(updateError.message);
+    await appendDemoEvent(
+      context,
+      demo.id,
+      "info",
+      "FINALIZATION_RETRY_REQUESTED",
+      "A manual finalization retry was requested.",
+    );
+    return withDurableRecordingUrl(rendering);
   });
 
 export const getDemoStatus = createServerFn({ method: "GET" })
@@ -687,11 +1073,11 @@ export const getDemoStatus = createServerFn({ method: "GET" })
     const context = await workspaceContext();
     const { data: demo, error } = await context.supabase
       .from("demos")
-      .select("id, status, progress_pct, current_step, steel_session_id, live_view_url, session_viewer_url, mp4_url, recording_url, duration_seconds, error_message")
+      .select(DEMO_SELECT)
       .eq("id", data.demoId)
       .eq("owner_id", context.userId)
       .maybeSingle();
     if (error) throw new Error(error.message);
     if (!demo) throw new Error("Demo not found.");
-    return demo;
+    return withDurableRecordingUrl(demo);
   });

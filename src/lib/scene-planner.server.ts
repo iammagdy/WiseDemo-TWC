@@ -2,14 +2,9 @@
 // browser actions with narration, capped to a 69 second demo.
 
 import type { ReconResult } from "./steel-recon.server";
+import type { CdpAction } from "./steel-recorder.server";
 
-export type PlannedAction =
-  | { type: "goto"; url: string; waitMs?: number }
-  | { type: "wait"; ms: number }
-  | { type: "scroll"; deltaY: number }
-  | { type: "click"; selector: string }
-  | { type: "type"; selector: string; text: string }
-  | { type: "eval"; expression: string };
+export type PlannedAction = CdpAction;
 
 export type PlannedScene = { action: PlannedAction; narration: string };
 
@@ -23,21 +18,85 @@ function safeActions(raw: unknown, origin: string): PlannedScene[] {
     const item = entry as Record<string, unknown>;
     const type = String(item.type ?? "");
     const narration = String(item.narration ?? "").slice(0, 160);
+    const timeoutMs = Math.min(Math.max(Number(item.timeoutMs) || 15_000, 1_000), 30_000);
+    const expectedRaw =
+      item.expected && typeof item.expected === "object"
+        ? (item.expected as Record<string, unknown>)
+        : null;
+    const expected = expectedRaw
+      ? {
+          selector:
+            typeof expectedRaw.selector === "string"
+              ? expectedRaw.selector.slice(0, 500)
+              : undefined,
+          urlIncludes:
+            typeof expectedRaw.urlIncludes === "string"
+              ? expectedRaw.urlIncludes.slice(0, 300)
+              : undefined,
+        }
+      : undefined;
+    const fallbacks = Array.isArray(item.fallbackSelectors)
+      ? item.fallbackSelectors
+          .filter((value): value is string => typeof value === "string")
+          .map((value) => value.slice(0, 500))
+          .slice(0, 5)
+      : undefined;
     if (type === "goto" && typeof item.url === "string") {
       try {
         const url = new URL(item.url, origin);
-        scenes.push({ action: { type: "goto", url: url.toString(), waitMs: 3000 }, narration });
+        if (url.origin !== origin) continue;
+        scenes.push({
+          action: {
+            type: "goto",
+            url: url.toString(),
+            waitMs: 1_000,
+            timeoutMs,
+            expected,
+          },
+          narration,
+        });
       } catch {
         /* skip */
       }
     } else if (type === "click" && typeof item.selector === "string") {
-      scenes.push({ action: { type: "click", selector: item.selector }, narration });
+      scenes.push({
+        action: {
+          type: "click",
+          selector: item.selector.slice(0, 500),
+          fallbackSelectors: fallbacks,
+          timeoutMs,
+          expected,
+        },
+        narration,
+      });
     } else if (type === "type" && typeof item.selector === "string") {
-      scenes.push({ action: { type: "type", selector: item.selector, text: String(item.text ?? "") }, narration });
+      scenes.push({
+        action: {
+          type: "type",
+          selector: item.selector.slice(0, 500),
+          fallbackSelectors: fallbacks,
+          text: String(item.text ?? "").slice(0, 300),
+          timeoutMs,
+          expected,
+        },
+        narration,
+      });
     } else if (type === "scroll") {
-      scenes.push({ action: { type: "scroll", deltaY: Number(item.deltaY) || 600 }, narration });
+      scenes.push({
+        action: { type: "scroll", deltaY: Number(item.deltaY) || 600, timeoutMs, expected },
+        narration,
+      });
     } else if (type === "wait") {
-      scenes.push({ action: { type: "wait", ms: Math.min(Number(item.ms) || 1500, 4000) }, narration });
+      scenes.push({
+        action: {
+          type: "wait",
+          ms: Math.min(Number(item.ms) || 1_500, 10_000),
+          selector: typeof item.selector === "string" ? item.selector.slice(0, 500) : undefined,
+          timeoutMs,
+          expected,
+        },
+        narration,
+      });
     }
     if (scenes.length >= 14) break;
   }
@@ -51,7 +110,6 @@ export async function planDemoScenes(input: {
   siteMapMd: string | null;
   recon: ReconResult | null;
   loginUrl?: string | null;
-  credentials: { username: string; secret: string } | null;
 }): Promise<{ scenes: PlannedScene[]; source: "ai" | "heuristic" }> {
   const apiKey = process.env.LOVABLE_API_KEY;
   const origin = new URL(input.baseUrl).origin;
@@ -82,7 +140,7 @@ export async function planDemoScenes(input: {
             {
               role: "system",
               content:
-                "You are a product demo director driving a real Chromium browser. Return JSON only: {\"scenes\":[{\"type\":\"goto|click|type|scroll|wait\",\"url\":\"\",\"selector\":\"\",\"text\":\"\",\"deltaY\":600,\"ms\":1500,\"narration\":\"\"}]}. Use ONLY selectors and URLs that appear in the supplied recon. Between 6 and 12 scenes, roughly 5 seconds each so the whole demo stays under 69 seconds. Start on a real page, show the requested feature with genuine clicks, and end on a value screen. Never invent selectors.",
+                'You are a product demo director driving a real Chromium browser. Return JSON only: {"scenes":[{"type":"goto|click|type|scroll|wait","url":"","selector":"","fallbackSelectors":[],"text":"","deltaY":600,"ms":1500,"timeoutMs":15000,"expected":{"selector":"","urlIncludes":""},"narration":""}]}. Use ONLY selectors and same-origin URLs from the supplied recon. Prefer valid CSS or exact selectors from recon. Each click or type must include an observable expected selector or URL when possible. Between 6 and 12 scenes. Start on a real page, show the requested feature with genuine clicks, and end on a value screen. Never invent selectors and never request or include credentials.',
             },
             {
               role: "user",
@@ -118,13 +176,19 @@ function heuristicScenes(
   origin: string,
 ): PlannedScene[] {
   const scenes: PlannedScene[] = [
-    { action: { type: "goto", url: input.baseUrl, waitMs: 3500 }, narration: `Opening ${new URL(origin).hostname}` },
+    {
+      action: { type: "goto", url: input.baseUrl, waitMs: 3500 },
+      narration: `Opening ${new URL(origin).hostname}`,
+    },
     { action: { type: "scroll", deltaY: 600 }, narration: "Showing the product value" },
     { action: { type: "scroll", deltaY: 700 }, narration: "Scrolling the proof section" },
   ];
   const pages = input.recon?.pages ?? [];
   for (const page of pages.slice(1, 4)) {
-    scenes.push({ action: { type: "goto", url: page.url, waitMs: 3000 }, narration: page.title || page.url });
+    scenes.push({
+      action: { type: "goto", url: page.url, waitMs: 3000 },
+      narration: page.title || page.url,
+    });
     scenes.push({ action: { type: "scroll", deltaY: 500 }, narration: "Reviewing this screen" });
   }
   scenes.push({ action: { type: "wait", ms: 2000 }, narration: input.featurePrompt.slice(0, 120) });

@@ -2,6 +2,8 @@
 // provided, and read the actual DOM so scene planning uses real selectors.
 
 import { cdpCall, delay, openCdp, type DecryptedCredentials } from "./steel-recorder.server";
+import { isVerifiedLoginOutcome } from "./demo-state";
+import { isSafeReconNavigation } from "./recon-safety";
 
 export type PageOutline = {
   url: string;
@@ -86,8 +88,34 @@ async function evaluate(cdp: Cdp, expression: string): Promise<unknown> {
 }
 
 async function goto(cdp: Cdp, url: string, waitMs = 3000) {
-  await cdpCall(cdp.socket, cdp.nextId(), "Page.navigate", { url }, cdp.sid);
-  await delay(waitMs);
+  const navigation = (await cdpCall(
+    cdp.socket,
+    cdp.nextId(),
+    "Page.navigate",
+    { url },
+    cdp.sid,
+  )) as { errorText?: string };
+  if (navigation.errorText) throw new Error(`Navigation failed: ${navigation.errorText}`);
+  const ready = await waitUntil(
+    cdp,
+    'document.readyState === "interactive" || document.readyState === "complete"',
+    15_000,
+  );
+  if (!ready) throw new Error("Page did not become ready during product recon.");
+  await delay(Math.min(waitMs, 1_500));
+}
+
+async function waitUntil(cdp: Cdp, expression: string, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      if ((await evaluate(cdp, expression)) === true) return true;
+    } catch {
+      // Navigation can briefly replace the execution context; retry it.
+    }
+    await delay(300);
+  }
+  return false;
 }
 
 async function outline(cdp: Cdp): Promise<PageOutline | null> {
@@ -123,37 +151,59 @@ export async function reconSite(input: {
     if (credentials) {
       const target = loginUrl ?? credentials.loginUrl ?? baseUrl;
       await goto(cdp, target, 3500);
-      const filled = await evaluate(
+      const filled = (await evaluate(
         cdp,
         `(() => {
           const user = document.querySelector('input[type="email"], input[name="email"], input[name="username"], input[autocomplete="username"], input[type="text"]');
           const pass = document.querySelector('input[type="password"], input[name="password"]');
-          if (!user || !pass) return false;
+          if (!user || !pass) return { filled: false, submitted: false };
           const setValue = (el, value) => {
             const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
-            const setter = Object.getOwnPropertyDescriptor(proto, 'value').set;
+            const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+            if (!setter) return false;
             el.focus();
             setter.call(el, value);
             el.dispatchEvent(new Event('input', { bubbles: true }));
             el.dispatchEvent(new Event('change', { bubbles: true }));
+            return el.value === value;
           };
-          setValue(user, ${JSON.stringify(credentials.username)});
-          setValue(pass, ${JSON.stringify(credentials.secret)});
+          const userApplied = setValue(user, ${JSON.stringify(credentials.username)});
+          const passApplied = setValue(pass, ${JSON.stringify(credentials.secret)});
           const form = pass.closest('form');
           const submit = (form && form.querySelector('button[type="submit"], input[type="submit"]')) ||
             Array.from(document.querySelectorAll('button')).find((b) => /sign in|log in|login|continue/i.test(b.innerText || ''));
           if (submit) submit.click();
           else if (form) form.requestSubmit ? form.requestSubmit() : form.submit();
-          return true;
+          return { filled: userApplied && passApplied, submitted: Boolean(submit || form) };
         })()`,
+      )) as { filled?: boolean; submitted?: boolean } | null;
+      if (!filled?.filled || !filled.submitted) {
+        throw new Error("Stored credential fields could not be filled and submitted.");
+      }
+      const leftLoginForm = await waitUntil(
+        cdp,
+        `(() => {
+          const password = document.querySelector('input[type="password"], input[name="password"]');
+          return !password;
+        })()`,
+        15_000,
       );
-      await delay(6000);
       const afterLogin = await outline(cdp);
       if (afterLogin) {
         const stillOnLogin = /password/i.test(JSON.stringify(afterLogin.inputs));
-        loggedIn = filled === true && !stillOnLogin;
+        loggedIn = isVerifiedLoginOutcome({
+          fieldsApplied: filled.filled === true,
+          submitted: filled.submitted === true,
+          loginFormGone: leftLoginForm,
+          outlineHasPasswordField: stillOnLogin,
+        });
         pages.push(afterLogin);
-        notes.push(loggedIn ? "Signed in with the stored credentials." : "Sign-in attempt did not reach an authenticated screen.");
+        if (!loggedIn) {
+          throw new Error("Stored credential sign-in did not reach an authenticated screen.");
+        }
+        notes.push("Signed in with the stored credentials.");
+      } else {
+        throw new Error("Could not inspect the page after credential sign-in.");
       }
     }
 
@@ -161,8 +211,7 @@ export async function reconSite(input: {
     const origin = new URL(baseUrl).origin;
     const candidates = (pages.at(-1)?.navLinks ?? [])
       .map((l) => l.href)
-      .filter((href) => href.startsWith(origin) && !seen.has(href))
-      .filter((href) => !/logout|signout|privacy|terms|blog|\.pdf$/i.test(href))
+      .filter((href) => isSafeReconNavigation(href, origin) && !seen.has(href))
       .slice(0, maxPages - pages.length);
 
     for (const href of candidates) {
@@ -174,6 +223,9 @@ export async function reconSite(input: {
       }
     }
   } catch (err) {
+    if (credentials && !loggedIn) {
+      throw new Error("Stored credential login failed. Check the login URL and test credentials.");
+    }
     notes.push(err instanceof Error ? err.message : String(err));
   } finally {
     try {
@@ -188,13 +240,23 @@ export async function reconSite(input: {
 
 export function outlineToMarkdown(name: string, baseUrl: string, recon: ReconResult): string {
   const lines: string[] = [`# ${name} — real product map`, "", `Base URL: ${baseUrl}`, ""];
-  lines.push(recon.loggedIn ? "Authenticated recon: yes (agent signed in)." : "Authenticated recon: no (public pages only).", "");
+  lines.push(
+    recon.loggedIn
+      ? "Authenticated recon: yes (agent signed in)."
+      : "Authenticated recon: no (public pages only).",
+    "",
+  );
   for (const page of recon.pages) {
     lines.push(`## ${page.title || page.url}`, `URL: ${page.url}`, "");
     if (page.headings.length) lines.push("Headings:", ...page.headings.map((h) => `- ${h}`), "");
     if (page.clickables.length)
-      lines.push("Clickable elements (real selectors):", ...page.clickables.map((c) => `- "${c.text}" → \`${c.selector}\``), "");
-    if (page.inputs.length) lines.push("Inputs:", ...page.inputs.map((i) => `- ${i.label} → \`${i.selector}\``), "");
+      lines.push(
+        "Clickable elements (real selectors):",
+        ...page.clickables.map((c) => `- "${c.text}" → \`${c.selector}\``),
+        "",
+      );
+    if (page.inputs.length)
+      lines.push("Inputs:", ...page.inputs.map((i) => `- ${i.label} → \`${i.selector}\``), "");
   }
   if (recon.notes.length) lines.push("## Agent notes", ...recon.notes.map((n) => `- ${n}`));
   return lines.join("\n");

@@ -1,6 +1,6 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
-import { ArrowRight, Loader2, Plus, Video } from "lucide-react";
+import { AlertTriangle, ArrowRight, Loader2, Plus, RefreshCw, Video } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -25,14 +25,17 @@ type ProjectRow = ProjectListItem;
 function Dashboard() {
   const fetchProjects = useServerFn(listProjects);
   const [projects, setProjects] = useState<ProjectRow[] | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
 
   const loadProjects = useCallback(async () => {
+    setLoadError(null);
     try {
       const rows = await fetchProjects();
       setProjects(rows);
-    } catch {
+    } catch (error) {
       setProjects([]);
+      setLoadError(error instanceof Error ? error.message : "Could not load the workspace.");
     }
   }, [fetchProjects]);
 
@@ -62,13 +65,14 @@ function Dashboard() {
       <main className="mx-auto max-w-6xl px-4 py-8 sm:px-6 sm:py-12">
         <div className="flex flex-col items-start justify-between gap-4 sm:flex-row sm:items-end sm:gap-6">
           <div className="min-w-0">
-            <p className="font-mono-tight text-xs uppercase tracking-widest text-primary">/// Call sheet</p>
-            <h1 className="mt-2 text-2xl font-semibold tracking-tight sm:text-3xl md:text-4xl">Your productions</h1>
+            <p className="font-mono-tight text-xs uppercase tracking-widest text-primary">
+              /// Call sheet
+            </p>
+            <h1 className="mt-2 text-2xl font-semibold tracking-tight sm:text-3xl md:text-4xl">
+              Your productions
+            </h1>
           </div>
-          <Button
-            onClick={() => setOpen(true)}
-            className="w-full sm:w-auto"
-          >
+          <Button onClick={() => setOpen(true)} className="w-full sm:w-auto">
             <Plus />
             New project
           </Button>
@@ -79,6 +83,23 @@ function Dashboard() {
             <div className="rounded-xl border border-border bg-card/50 p-8 text-sm text-muted-foreground">
               Loading dailies…
             </div>
+          ) : loadError ? (
+            <div
+              role="alert"
+              className="rounded-xl border border-destructive/40 bg-destructive/10 p-6"
+            >
+              <div className="flex items-start gap-3">
+                <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-destructive" />
+                <div>
+                  <h2 className="font-semibold">Workspace unavailable</h2>
+                  <p className="mt-1 text-sm text-muted-foreground">{loadError}</p>
+                  <Button type="button" variant="outline" className="mt-4" onClick={loadProjects}>
+                    <RefreshCw />
+                    Retry
+                  </Button>
+                </div>
+              </div>
+            </div>
           ) : projects.length === 0 ? (
             <EmptyState onNew={() => setOpen(true)} />
           ) : (
@@ -88,14 +109,20 @@ function Dashboard() {
                   key={p.id}
                   className="rounded-xl border border-border bg-card transition hover:border-primary/50"
                 >
-                  <Link to="/projects/$projectId" params={{ projectId: p.id }} className="block p-5">
+                  <Link
+                    to="/projects/$projectId"
+                    params={{ projectId: p.id }}
+                    className="block p-5"
+                  >
                     <div className="flex items-start justify-between gap-4">
                       <div className="min-w-0">
                         <div className="font-mono-tight text-[11px] uppercase text-muted-foreground">
                           {new Date(p.created_at).toLocaleDateString()}
                         </div>
                         <div className="mt-1 truncate text-lg font-semibold">{p.name}</div>
-                        <div className="mt-1 truncate text-sm text-muted-foreground">{p.base_url}</div>
+                        <div className="mt-1 truncate text-sm text-muted-foreground">
+                          {p.base_url}
+                        </div>
                       </div>
                       <span className="mt-2 rounded-md border border-border p-2 text-muted-foreground">
                         <ArrowRight className="h-4 w-4" />
@@ -132,10 +159,7 @@ function EmptyState({ onNew }: { onNew: () => void }) {
       <p className="mx-auto mt-2 max-w-sm text-sm text-muted-foreground">
         Add your first SaaS URL and WiseDemo will map, script, and film a 60-second cut.
       </p>
-      <Button
-        onClick={onNew}
-        className="mt-6"
-      >
+      <Button onClick={onNew} className="mt-6">
         <Plus />
         Start your first project
       </Button>
@@ -143,13 +167,7 @@ function EmptyState({ onNew }: { onNew: () => void }) {
   );
 }
 
-function NewProjectDialog({
-  onClose,
-  onCreated,
-}: {
-  onClose: () => void;
-  onCreated: () => void;
-}) {
+function NewProjectDialog({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
   const navigate = useNavigate();
   const createProjectAction = useServerFn(createProject);
   const [name, setName] = useState("");
@@ -229,17 +247,10 @@ function NewProjectDialog({
         </div>
 
         <div className="mt-6 flex justify-end gap-2">
-          <Button
-            type="button"
-            variant="outline"
-            onClick={onClose}
-          >
+          <Button type="button" variant="outline" onClick={onClose}>
             Cancel
           </Button>
-          <Button
-            type="submit"
-            disabled={saving}
-          >
+          <Button type="submit" disabled={saving}>
             {saving ? <Loader2 className="animate-spin" /> : <Plus />}
             {saving ? "Creating…" : "Create project"}
           </Button>
