@@ -7,15 +7,15 @@
   },
   "mcp": {
     "server": {
-      "name": "founder-s-demo-genie",
+      "name": "wisedemo",
       "version": "0.1.0",
-      "title": "Founder's Demo Genie"
+      "title": "WiseDemo"
     },
     "tools": [
       {
         "name": "list_projects",
         "title": "List demo projects",
-        "description": "List the DemoForge projects (name, website URL, description, last scan time).",
+        "description": "List the WiseDemo projects (name, website URL, description, last scan time).",
         "annotations": {
           "readOnlyHint": true,
           "idempotentHint": true,
@@ -31,7 +31,7 @@
       {
         "name": "get_project",
         "title": "Get project details",
-        "description": "Get one DemoForge project including its AI-generated product/site map markdown and its recorded demos.",
+        "description": "Get one WiseDemo project including its AI-generated product/site map markdown and its recorded demos.",
         "annotations": {
           "readOnlyHint": true,
           "idempotentHint": true,

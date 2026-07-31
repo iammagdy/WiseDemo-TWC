@@ -4,13 +4,13 @@ import { Landing } from "@/components/landing/Landing";
 export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
-      { title: "DemoForge — Cinematic product demos, filmed by AI in 60 seconds" },
+      { title: "WiseDemo — Cinematic product demos, filmed by AI in 60 seconds" },
       {
         name: "description",
         content:
           "Drop your URL. Our agent maps your SaaS, scripts the flow, and records a real ≤60s product demo you can ship to social — no editors, no takes.",
       },
-      { property: "og:title", content: "DemoForge — Cinematic product demos, filmed by AI" },
+      { property: "og:title", content: "WiseDemo — Cinematic product demos, filmed by AI" },
       {
         property: "og:description",
         content:

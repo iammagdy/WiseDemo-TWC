@@ -9,10 +9,10 @@ import { createProject, listProjects, type ProjectListItem } from "@/lib/studio.
 export const Route = createFileRoute("/dashboard")({
   head: () => ({
     meta: [
-      { title: "Dashboard — DemoForge" },
-      { name: "description", content: "Your DemoForge projects, demos, and render queue." },
-      { property: "og:title", content: "Dashboard — DemoForge" },
-      { property: "og:description", content: "Your DemoForge projects, demos, and render queue." },
+      { title: "Dashboard — WiseDemo" },
+      { name: "description", content: "Your WiseDemo projects, demos, and render queue." },
+      { property: "og:title", content: "Dashboard — WiseDemo" },
+      { property: "og:description", content: "Your WiseDemo projects, demos, and render queue." },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },
     ],
@@ -46,7 +46,7 @@ function Dashboard() {
         <div className="mx-auto flex max-w-6xl items-center justify-between gap-3 px-4 py-4 sm:px-6">
           <Link to="/" className="flex min-w-0 items-center gap-2">
             <span className="h-2 w-2 rounded-full bg-primary animate-record" />
-            <span className="font-mono-tight text-sm font-semibold">DemoForge</span>
+            <span className="font-mono-tight text-sm font-semibold">WiseDemo</span>
             <span className="ml-2 hidden rounded-sm border border-border px-1.5 py-0.5 font-mono-tight text-[10px] uppercase text-muted-foreground sm:inline">
               Studio
             </span>
@@ -130,7 +130,7 @@ function EmptyState({ onNew }: { onNew: () => void }) {
       </div>
       <h2 className="text-xl font-semibold tracking-tight">The set is empty.</h2>
       <p className="mx-auto mt-2 max-w-sm text-sm text-muted-foreground">
-        Add your first SaaS URL and DemoForge will map, script, and film a 60-second cut.
+        Add your first SaaS URL and WiseDemo will map, script, and film a 60-second cut.
       </p>
       <Button
         onClick={onNew}

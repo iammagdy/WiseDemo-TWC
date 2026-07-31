@@ -29,7 +29,7 @@ npm run dev
 - Tailwind CSS
 
 
-## DemoForge (this app)
+## WiseDemo (this app)
 
 Agentic demo-video studio: point it at a SaaS URL, it scans the site, plans a
 shot list with AI, drives a real cloud browser (Steel.dev) through the product,

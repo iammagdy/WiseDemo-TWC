@@ -283,7 +283,7 @@ async function fetchHtml(url: string, timeoutMs: number) {
       redirect: "follow",
       headers: {
         accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "user-agent": "Mozilla/5.0 (compatible; DemoForgeBot/1.0; +https://lovable.dev)",
+        "user-agent": "Mozilla/5.0 (compatible; WiseDemoBot/1.0; +https://lovable.dev)",
       },
     });
 

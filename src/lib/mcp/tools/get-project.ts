@@ -6,7 +6,7 @@ export default defineTool({
   name: "get_project",
   title: "Get project details",
   description:
-    "Get one DemoForge project including its AI-generated product/site map markdown and its recorded demos.",
+    "Get one WiseDemo project including its AI-generated product/site map markdown and its recorded demos.",
   inputSchema: { project_id: z.string().uuid().describe("The project id from list_projects.") },
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
   handler: async ({ project_id }) => {
