@@ -1,6 +1,6 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
-import { ArrowLeft, ExternalLink, Film, KeyRound, Loader2, Map, Play, RefreshCw, Save, Sparkles } from "lucide-react";
+import { ArrowLeft, Download, ExternalLink, Film, KeyRound, Loader2, Map, Play, RefreshCw, Save, Sparkles } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import {
   createDemoJob,
+  finalizeDemoRecording,
   getDemoStatus,
   getProjectWorkspace,
   runDemoScenes,
@@ -41,6 +42,7 @@ function ProjectStudio() {
   const createDemo = useServerFn(createDemoJob);
   const scanSite = useServerFn(scanProjectSite);
   const runScenes = useServerFn(runDemoScenes);
+  const finalizeRecording = useServerFn(finalizeDemoRecording);
   const fetchDemoStatus = useServerFn(getDemoStatus);
 
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
@@ -195,6 +197,20 @@ function ProjectStudio() {
             pollingRef.current.delete(demoId);
             return;
           }
+          if (status.status === "rendering") {
+            const finalized = await finalizeRecording({ data: { demoId } });
+            setWorkspace((current) => {
+              if (!current) return current;
+              return {
+                ...current,
+                demos: current.demos.map((d) => (d.id === demoId ? { ...d, ...finalized } : d)),
+              };
+            });
+            if (finalized?.status === "ready") {
+              pollingRef.current.delete(demoId);
+              return;
+            }
+          }
         } catch {
           /* ignore transient errors */
         }
@@ -202,14 +218,14 @@ function ProjectStudio() {
       };
       setTimeout(tick, 2500);
     },
-    [fetchDemoStatus],
+    [fetchDemoStatus, finalizeRecording],
   );
 
   // Resume polling for any in-flight demos when workspace loads
   useEffect(() => {
     if (!workspace) return;
     for (const demo of workspace.demos) {
-      if (demo.status === "starting" || demo.status === "recording") {
+      if (demo.status === "starting" || demo.status === "recording" || demo.status === "rendering") {
         startPolling(demo.id);
       }
     }
@@ -385,9 +401,10 @@ function ProjectStudio() {
 
 
 function DemoRow({ demo }: { demo: Demo }) {
-  const embedUrl = demo.live_view_url ?? demo.session_viewer_url ?? demo.recording_url ?? null;
+  const videoUrl = demo.mp4_url ?? demo.recording_url ?? null;
   const isLive = demo.status === "starting" || demo.status === "recording";
-  const isReady = demo.status === "ready";
+  const isReady = demo.status === "ready" && Boolean(videoUrl);
+  const liveUrl = isLive ? (demo.live_view_url ?? demo.session_viewer_url) : null;
   return (
     <article className="rounded-lg border border-border bg-card p-4">
       <div className="grid gap-4 md:grid-cols-[1fr_360px] md:items-start">
@@ -412,22 +429,39 @@ function DemoRow({ demo }: { demo: Demo }) {
               {demo.error_message}
             </div>
           ) : null}
-          {embedUrl ? (
+          {(liveUrl ?? demo.session_viewer_url) ? (
             <a
-              href={embedUrl}
+              href={(liveUrl ?? demo.session_viewer_url) as string}
               target="_blank"
               rel="noopener noreferrer"
               className="mt-3 inline-flex items-center gap-1.5 text-xs font-semibold text-primary hover:underline"
             >
               <ExternalLink className="h-3.5 w-3.5" />
-              {isReady ? "Open replay in new tab" : "Open live session in new tab"}
+              {isLive ? "Open live session in new tab" : "Open session replay"}
             </a>
           ) : null}
         </div>
         <div className="flex flex-col gap-2">
-          {embedUrl ? (
+          {isReady && videoUrl ? (
+            <>
+              <video
+                src={videoUrl}
+                controls
+                playsInline
+                preload="metadata"
+                className="aspect-video w-full rounded-md border border-border bg-black"
+              />
+              <Button asChild variant="outline" size="sm">
+                <a href={videoUrl} download={`${demo.title.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}.mp4`}>
+                  <Download />
+                  Download MP4
+                  {demo.duration_seconds ? ` (${demo.duration_seconds}s)` : ""}
+                </a>
+              </Button>
+            </>
+          ) : liveUrl ? (
             <iframe
-              src={embedUrl}
+              src={liveUrl}
               title={demo.title}
               className="aspect-video w-full rounded-md border border-border bg-background"
               allow="clipboard-read; clipboard-write"
@@ -435,7 +469,7 @@ function DemoRow({ demo }: { demo: Demo }) {
             />
           ) : (
             <div className="flex aspect-video w-full items-center justify-center rounded-md border border-border bg-background text-muted-foreground">
-              {isLive ? <Loader2 className="h-6 w-6 animate-spin" /> : <Film className="h-7 w-7" />}
+              {demo.status === "rendering" || isLive ? <Loader2 className="h-6 w-6 animate-spin" /> : <Film className="h-7 w-7" />}
             </div>
           )}
         </div>

@@ -6,11 +6,13 @@ import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { normalizePublicUrl, scanWebsite } from "./studio-scanner.server";
 import {
   createSteelSession,
-  planScenes,
+  fetchSessionMp4,
   releaseSteelSession,
   runScenesOverCdp,
   type DecryptedCredentials,
 } from "./steel-recorder.server";
+import { outlineToMarkdown, reconSite, type ReconResult } from "./steel-recon.server";
+import { planDemoScenes } from "./scene-planner.server";
 
 function deriveCredsKey(): Buffer {
   const keySecret = process.env.DEMOFORGE_CREDS_KEY;
@@ -38,6 +40,25 @@ function decryptCredentials(ciphertext: string): DecryptedCredentials {
   } catch {
     return null;
   }
+}
+
+type SupabaseCtx = { supabase: { from: (table: string) => any } };
+
+async function loadCredentials(
+  context: SupabaseCtx,
+  projectId: string,
+  userId: string,
+): Promise<{ credentials: DecryptedCredentials; loginUrl: string | null }> {
+  const { data: row } = await context.supabase
+    .from("project_credentials")
+    .select("kind, login_url, ciphertext")
+    .eq("project_id", projectId)
+    .eq("owner_id", userId)
+    .maybeSingle();
+
+  const credentials =
+    row?.kind === "password" && row.ciphertext ? decryptCredentials(row.ciphertext) : null;
+  return { credentials, loginUrl: row?.login_url ?? null };
 }
 
 export const createProject = createServerFn({ method: "POST" })
@@ -148,12 +169,46 @@ export const scanProjectSite = createServerFn({ method: "POST" })
     if (existingError) throw new Error(existingError.message);
     if (!existing) throw new Error("Project not found.");
 
-    const scan = await scanWebsite(existing.base_url, existing.name);
+    const { credentials, loginUrl } = await loadCredentials(context, data.projectId, context.userId);
+
+    // Agentic pass first: a real browser opens the product (signing in when
+    // credentials exist) and reads the actual DOM.
+    let siteMapMd: string | null = null;
+    let description: string | null = null;
+    let sessionId: string | null = null;
+    try {
+      const session = await createSteelSession(existing.base_url);
+      sessionId = session.id;
+      if (session.websocketUrl) {
+        const recon = await reconSite({
+          websocketUrl: session.websocketUrl,
+          baseUrl: existing.base_url,
+          loginUrl,
+          credentials,
+          maxPages: 4,
+        });
+        if (recon.pages.length) {
+          siteMapMd = outlineToMarkdown(existing.name, existing.base_url, recon);
+          description = recon.pages[0]?.headings[0] ?? null;
+        }
+      }
+    } catch {
+      siteMapMd = null;
+    } finally {
+      if (sessionId) await releaseSteelSession(sessionId).catch(() => null);
+    }
+
+    if (!siteMapMd) {
+      const scan = await scanWebsite(existing.base_url, existing.name);
+      siteMapMd = scan.siteMapMd;
+      description = scan.description;
+    }
+
     const { data: project, error } = await context.supabase
       .from("projects")
       .update({
-        description: scan.description,
-        site_map_md: scan.siteMapMd,
+        description,
+        site_map_md: siteMapMd,
         site_map_source: "manual",
         site_map_updated_at: new Date().toISOString(),
       })
@@ -318,33 +373,8 @@ export const createDemoJob = createServerFn({ method: "POST" })
       project = scannedProject;
     }
 
-    const { data: credentialRow } = await context.supabase
-      .from("project_credentials")
-      .select("kind, login_url, ciphertext")
-      .eq("project_id", data.projectId)
-      .eq("owner_id", context.userId)
-      .maybeSingle();
-
-    const decrypted =
-      credentialRow?.kind === "password" && credentialRow.ciphertext
-        ? decryptCredentials(credentialRow.ciphertext)
-        : null;
-
-    const plan = planScenes({
-      baseUrl: project.base_url,
-      loginUrl: credentialRow?.login_url ?? null,
-      credentials: decrypted,
-      featurePrompt: data.featurePrompt,
-      siteMapMd: project.site_map_md,
-    });
-
-    const sceneScript = plan.actions.map((action, index) => ({
-      seconds: `${index * 4}-${(index + 1) * 4}`,
-      shot: plan.narration[index] ?? `Action: ${action.type}`,
-      action,
-    }));
-
-    // Insert demo row in "starting" state
+    // Insert demo row in "starting" state; the agent plans the shot list once
+    // the real browser has scouted the product.
     const { data: demo, error: insertError } = await context.supabase
       .from("demos")
       .insert({
@@ -352,7 +382,6 @@ export const createDemoJob = createServerFn({ method: "POST" })
         owner_id: context.userId,
         title: data.title,
         feature_prompt: data.featurePrompt,
-        scene_script: sceneScript,
         status: "starting",
         progress_pct: 5,
         current_step: "Booting real cloud browser on Steel.dev\u2026",
@@ -398,16 +427,15 @@ export const createDemoJob = createServerFn({ method: "POST" })
     }
   });
 
-// Drive the Steel session with the planned actions, then release it.
-// Called from the client after createDemoJob returns, so we don't block the
-// initial response on a long CDP run.
+// Recon the product with the live browser, let the AI write the shot list,
+// drive it for real, then release the session so Steel finalizes the video.
 export const runDemoScenes = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((data) => z.object({ demoId: z.string().uuid() }).parse(data))
   .handler(async ({ data, context }) => {
     const { data: demo, error } = await context.supabase
       .from("demos")
-      .select("id, steel_session_id, scene_script, project_id")
+      .select("id, steel_session_id, feature_prompt, project_id")
       .eq("id", data.demoId)
       .eq("owner_id", context.userId)
       .maybeSingle();
@@ -415,42 +443,163 @@ export const runDemoScenes = createServerFn({ method: "POST" })
     if (error) throw new Error(error.message);
     if (!demo || !demo.steel_session_id) throw new Error("No active Steel session for this demo.");
 
+    const { data: project } = await context.supabase
+      .from("projects")
+      .select("id, name, base_url, site_map_md")
+      .eq("id", demo.project_id)
+      .maybeSingle();
+    if (!project) throw new Error("Project not found.");
+
+    const { credentials, loginUrl } = await loadCredentials(context, demo.project_id, context.userId);
+
     const session = await (
       await import("./steel-recorder.server")
     ).getSteelSession(demo.steel_session_id);
     const websocketUrl =
       session && typeof session.websocketUrl === "string" ? session.websocketUrl : null;
+    if (!websocketUrl) throw new Error("Cloud browser session is no longer available.");
 
-    let result: { executed: number; error?: string } = { executed: 0 };
-    if (websocketUrl) {
-      const script = Array.isArray(demo.scene_script) ? demo.scene_script : [];
-      const actions = script
-        .map((s) => (typeof s === "object" && s !== null ? (s as Record<string, unknown>).action : null))
-        .filter((a): a is Parameters<typeof runScenesOverCdp>[1][number] => Boolean(a));
-      result = await runScenesOverCdp(websocketUrl, actions);
+    await context.supabase
+      .from("demos")
+      .update({ progress_pct: 20, current_step: "Agent scouting the product\u2026" })
+      .eq("id", demo.id);
+
+    let recon: ReconResult | null = null;
+    try {
+      recon = await reconSite({
+        websocketUrl,
+        baseUrl: project.base_url,
+        loginUrl,
+        credentials,
+        maxPages: 3,
+      });
+      if (recon.pages.length) {
+        await context.supabase
+          .from("projects")
+          .update({
+            site_map_md: outlineToMarkdown(project.name, project.base_url, recon),
+            site_map_source: "manual",
+            site_map_updated_at: new Date().toISOString(),
+          })
+          .eq("id", project.id)
+          .eq("owner_id", context.userId);
+      }
+    } catch {
+      recon = null;
     }
+
+    await context.supabase
+      .from("demos")
+      .update({ progress_pct: 40, current_step: "AI writing the shot list\u2026" })
+      .eq("id", demo.id);
+
+    const plan = await planDemoScenes({
+      productName: project.name,
+      baseUrl: project.base_url,
+      featurePrompt: demo.feature_prompt,
+      siteMapMd: project.site_map_md,
+      recon,
+      loginUrl,
+      credentials: credentials ? { username: credentials.username, secret: credentials.secret } : null,
+    });
+
+    const sceneScript = plan.scenes.map((scene, index) => ({
+      seconds: `${index * 5}-${(index + 1) * 5}`,
+      shot: scene.narration || `Action: ${scene.action.type}`,
+      action: scene.action,
+    }));
+
+    await context.supabase
+      .from("demos")
+      .update({
+        status: "recording",
+        progress_pct: 55,
+        current_step: "Recording the real product walkthrough\u2026",
+        scene_script: sceneScript,
+      })
+      .eq("id", demo.id);
+
+    const result = await runScenesOverCdp(
+      websocketUrl,
+      plan.scenes.map((scene) => scene.action),
+      55000,
+    );
 
     // Release session; grab replay URL
     const released = await releaseSteelSession(demo.steel_session_id);
 
-    const status = result.error && result.executed === 0 ? "failed" : "ready";
-    const currentStep = result.error
-      ? `Finished with warnings: ${result.error}`
-      : "Recording complete \u2014 replay ready.";
+    const { data: updated } = await context.supabase
+      .from("demos")
+      .update({
+        status: result.executed === 0 ? "failed" : "rendering",
+        progress_pct: result.executed === 0 ? 0 : 80,
+        current_step:
+          result.executed === 0
+            ? `Recording failed: ${result.error ?? "no actions ran"}`
+            : "Encoding the MP4\u2026",
+        session_viewer_url: released?.sessionViewerUrl ?? null,
+        live_view_url: null,
+        error_message: result.executed === 0 ? (result.error ?? "No actions ran.") : null,
+      })
+      .eq("id", demo.id)
+      .select("id, status, progress_pct, current_step, session_viewer_url, live_view_url, mp4_url, recording_url, error_message")
+      .single();
+
+    return updated;
+  });
+
+// Pull the finalized MP4 out of Steel, store it in Cloud storage, and expose a
+// long-lived signed URL the browser can play and download.
+export const finalizeDemoRecording = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((data) => z.object({ demoId: z.string().uuid() }).parse(data))
+  .handler(async ({ data, context }) => {
+    const { data: demo, error } = await context.supabase
+      .from("demos")
+      .select("id, steel_session_id, project_id")
+      .eq("id", data.demoId)
+      .eq("owner_id", context.userId)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    if (!demo?.steel_session_id) throw new Error("This demo has no recording session.");
+
+    const recording = await fetchSessionMp4(demo.steel_session_id, { attempts: 5, waitMs: 4000 });
+
+    if (!recording) {
+      const { data: pending } = await context.supabase
+        .from("demos")
+        .update({ current_step: "Waiting for the recording to finish encoding\u2026" })
+        .eq("id", demo.id)
+        .select("id, status, progress_pct, current_step, mp4_url, recording_url, error_message")
+        .single();
+      return pending;
+    }
+
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const path = `${context.userId}/${demo.id}.mp4`;
+    const upload = await supabaseAdmin.storage
+      .from("demo-recordings")
+      .upload(path, recording.bytes, { contentType: "video/mp4", upsert: true });
+    if (upload.error) throw new Error(upload.error.message);
+
+    const signed = await supabaseAdmin.storage
+      .from("demo-recordings")
+      .createSignedUrl(path, 60 * 60 * 24 * 365);
+    const url = signed.data?.signedUrl ?? null;
 
     const { data: updated } = await context.supabase
       .from("demos")
       .update({
-        status,
+        status: "ready",
         progress_pct: 100,
-        current_step: currentStep,
-        session_viewer_url: released?.sessionViewerUrl ?? null,
-        live_view_url: released?.liveViewUrl ?? null,
-        recording_url: released?.sessionViewerUrl ?? null,
-        error_message: result.error && result.executed === 0 ? result.error : null,
+        current_step: "Demo ready \u2014 real recording of your product.",
+        mp4_url: url,
+        recording_url: url,
+        duration_seconds: recording.durationSeconds,
+        error_message: null,
       })
       .eq("id", demo.id)
-      .select("id, status, progress_pct, current_step, session_viewer_url, live_view_url, recording_url, error_message")
+      .select("id, status, progress_pct, current_step, mp4_url, recording_url, duration_seconds, error_message")
       .single();
 
     return updated;
@@ -462,7 +611,7 @@ export const getDemoStatus = createServerFn({ method: "GET" })
   .handler(async ({ data, context }) => {
     const { data: demo, error } = await context.supabase
       .from("demos")
-      .select("id, status, progress_pct, current_step, steel_session_id, live_view_url, session_viewer_url, recording_url, error_message")
+      .select("id, status, progress_pct, current_step, steel_session_id, live_view_url, session_viewer_url, mp4_url, recording_url, duration_seconds, error_message")
       .eq("id", data.demoId)
       .eq("owner_id", context.userId)
       .maybeSingle();

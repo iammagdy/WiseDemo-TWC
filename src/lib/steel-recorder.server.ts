@@ -109,7 +109,7 @@ export type ScenePlan = {
   narration: string[];
 };
 
-async function openCdp(websocketUrl: string): Promise<WebSocket> {
+export async function openCdp(websocketUrl: string): Promise<WebSocket> {
   // Steel's websocketUrl already includes auth. Cloudflare Workers require
   // fetch with Upgrade header rather than `new WebSocket()`.
   const upgradeUrl = websocketUrl.replace(/^ws/, "http");
@@ -124,7 +124,7 @@ async function openCdp(websocketUrl: string): Promise<WebSocket> {
   return socket;
 }
 
-function cdpCall(
+export function cdpCall(
   socket: WebSocket,
   id: number,
   method: string,
@@ -158,8 +158,60 @@ function cdpCall(
   });
 }
 
-function delay(ms: number) {
+export function delay(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// ---- Recording retrieval ---------------------------------------------
+// Steel finalizes each session recording as fragmented MP4 segments behind an
+// HLS playlist. Concatenating init.mp4 + segments yields a single playable MP4.
+
+export async function fetchSessionMp4(
+  sessionId: string,
+  { attempts = 6, waitMs = 4000 }: { attempts?: number; waitMs?: number } = {},
+): Promise<{ bytes: Uint8Array; durationSeconds: number } | null> {
+  const key = requireSteelKey();
+
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const res = await fetch(`${STEEL_BASE}/sessions/${sessionId}/hls`, {
+      headers: { "Steel-Api-Key": key },
+    });
+    const playlist = res.ok ? await res.text() : "";
+
+    if (playlist.includes("#EXT-X-ENDLIST")) {
+      const initMatch = playlist.match(/#EXT-X-MAP:URI="([^"]+)"/);
+      const segments = playlist.match(/^https?:\/\/\S+$/gm) ?? [];
+      const duration = (playlist.match(/#EXTINF:([\d.]+)/g) ?? []).reduce(
+        (total, line) => total + Number(line.replace("#EXTINF:", "")),
+        0,
+      );
+      if (!segments.length) return null;
+
+      const urls = [initMatch?.[1], ...segments].filter((u): u is string => Boolean(u));
+      const chunks: Uint8Array[] = [];
+      let size = 0;
+      for (const url of urls) {
+        const partRes = await fetch(url);
+        if (!partRes.ok) continue;
+        const buffer = new Uint8Array(await partRes.arrayBuffer());
+        chunks.push(buffer);
+        size += buffer.byteLength;
+      }
+      if (!size) return null;
+
+      const bytes = new Uint8Array(size);
+      let offset = 0;
+      for (const chunk of chunks) {
+        bytes.set(chunk, offset);
+        offset += chunk.byteLength;
+      }
+      return { bytes, durationSeconds: Math.round(duration) };
+    }
+
+    await delay(waitMs);
+  }
+
+  return null;
 }
 
 export async function runScenesOverCdp(
