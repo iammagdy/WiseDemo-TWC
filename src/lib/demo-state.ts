@@ -40,13 +40,13 @@ export type PlaybackDemo = {
   status: string;
   mp4_url: string | null;
   recording_url: string | null;
-  recording_object_path?: string | null;
+  recording_file_id?: string | null;
   live_view_url: string | null;
   session_viewer_url: string | null;
 };
 
 export function getDemoPlaybackState(demo: PlaybackDemo) {
-  const durableUrl = demo.recording_object_path ? stableRecordingUrl(demo.id) : null;
+  const durableUrl = demo.recording_file_id ? stableRecordingUrl(demo.id) : null;
   const videoUrl = durableUrl ?? demo.mp4_url ?? demo.recording_url ?? null;
   const isLive = ["starting", "scanning", "planning", "recording"].includes(demo.status);
   const liveUrl = isLive ? (demo.live_view_url ?? demo.session_viewer_url) : null;

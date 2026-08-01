@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 
+import type { DemoRecord } from "@/integrations/appwrite/types";
 import { safeRecordingFilename } from "@/lib/demo-state";
 
 export const Route = createFileRoute("/api/public/demo-recordings/$demoId")({
@@ -13,48 +14,65 @@ export const Route = createFileRoute("/api/public/demo-recordings/$demoId")({
           return new Response("Recording not found.", { status: 404 });
         }
 
-        const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-        const { data: demo, error } = await supabaseAdmin
-          .from("demos")
-          .select("title, status, recording_object_path")
-          .eq("id", demoId)
-          .maybeSingle();
-
-        if (error) {
+        const { appwriteWorkspace } = await import("@/integrations/appwrite/repository.server");
+        let demo: DemoRecord | null;
+        try {
+          demo = await appwriteWorkspace().getDemo(demoId);
+        } catch (error) {
           console.error("[WiseDemo] recording URL lookup failed", {
             demoId,
-            code: error.code,
+            code: error instanceof Error ? error.message : "APPWRITE_LOOKUP_FAILED",
           });
           return new Response("Could not load the recording.", { status: 503 });
         }
-        if (demo?.status !== "ready" || !demo.recording_object_path) {
+        if (demo?.status !== "ready" || !demo.recording_file_id) {
           return new Response("Recording not found.", { status: 404 });
         }
 
         const wantsDownload = new URL(request.url).searchParams.get("download") === "1";
-        const signed = await supabaseAdmin.storage
-          .from("demo-recordings")
-          .createSignedUrl(
-            demo.recording_object_path,
-            5 * 60,
-            wantsDownload ? { download: safeRecordingFilename(demo.title) } : undefined,
-          );
-        if (signed.error || !signed.data?.signedUrl) {
-          console.error("[WiseDemo] recording signing failed", {
-            demoId,
-            code: signed.error?.name ?? "SIGNED_URL_MISSING",
+        const { appwriteServer } = await import("@/integrations/appwrite/client.server");
+        const { fetchAppwriteRecording } = await import("@/integrations/appwrite/storage.server");
+        let upstream: Response;
+        try {
+          upstream = await fetchAppwriteRecording(appwriteServer().config, demo.recording_file_id, {
+            range: request.headers.get("range"),
+            signal: request.signal,
           });
-          return new Response("Could not sign the recording URL.", { status: 503 });
+        } catch (error) {
+          console.error("[WiseDemo] Appwrite recording fetch failed", {
+            demoId,
+            code: error instanceof Error ? error.name : "APPWRITE_FILE_FETCH_FAILED",
+          });
+          return new Response("Could not load the recording.", { status: 503 });
         }
 
-        return new Response(null, {
-          status: 302,
-          headers: {
-            location: signed.data.signedUrl,
-            "cache-control": "private, no-store",
-            "referrer-policy": "no-referrer",
-          },
+        if (![200, 206, 416].includes(upstream.status)) {
+          await upstream.body?.cancel().catch(() => undefined);
+          return new Response(
+            upstream.status === 404 ? "Recording not found." : "Could not load the recording.",
+            { status: upstream.status === 404 ? 404 : 503 },
+          );
+        }
+
+        const headers = new Headers({
+          "accept-ranges": upstream.headers.get("accept-ranges") ?? "bytes",
+          "cache-control": "private, no-store",
+          "content-type": upstream.headers.get("content-type") ?? "video/mp4",
+          "cross-origin-resource-policy": "same-origin",
+          "referrer-policy": "no-referrer",
         });
+        for (const name of ["content-length", "content-range", "etag", "last-modified"]) {
+          const value = upstream.headers.get(name);
+          if (value) headers.set(name, value);
+        }
+        if (wantsDownload) {
+          headers.set(
+            "content-disposition",
+            `attachment; filename="${safeRecordingFilename(demo.title)}"`,
+          );
+        }
+
+        return new Response(upstream.body, { status: upstream.status, headers });
       },
     },
   },

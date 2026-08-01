@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { createFile, type MP4BoxBuffer } from "mp4box";
 
 import {
   fetchFinalizedHlsMp4,
+  finalizeFragmentedMp4,
+  listIsoBmffBoxes,
   normalizeSelectorCandidates,
   parseHlsPlaylist,
   splitSelectorList,
@@ -11,29 +14,54 @@ import {
 
 const playlistUrl = "https://api.steel.dev/v1/sessions/session-id/hls";
 
-function box(type: string, payloadLength = 0): Uint8Array {
-  const bytes = new Uint8Array(8 + payloadLength);
-  new DataView(bytes.buffer).setUint32(0, bytes.byteLength);
-  for (let index = 0; index < 4; index += 1) bytes[4 + index] = type.charCodeAt(index);
-  return bytes;
-}
-
-function concat(...chunks: Uint8Array[]): Uint8Array {
-  const bytes = new Uint8Array(chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0));
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return bytes;
-}
-
 function responseBody(bytes: Uint8Array): ArrayBuffer {
   return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
 }
 
-const initMp4 = concat(box("ftyp", 4), box("moov", 4));
-const mediaSegment = concat(box("moof", 4), box("mdat", 4));
+function fragmentedFixture(): { init: Uint8Array; segments: Uint8Array[] } {
+  const file = createFile();
+  const trackId = file.addTrack({
+    type: "avc1",
+    timescale: 1_000,
+    width: 16,
+    height: 16,
+  });
+  file.addSample(trackId, new Uint8Array([0, 0, 0, 1, 9]), {
+    duration: 1_000,
+    dts: 0,
+    cts: 0,
+    is_sync: true,
+  });
+  file.addSample(trackId, new Uint8Array([0, 0, 0, 1, 9]), {
+    duration: 1_000,
+    dts: 1_000,
+    cts: 1_000,
+    is_sync: true,
+  });
+  const bytes = new Uint8Array(file.getBuffer().buffer);
+  const view = new DataView(bytes.buffer);
+  const top: Array<{ offset: number; size: number; type: string }> = [];
+  for (let offset = 0; offset + 8 <= bytes.byteLength; ) {
+    const size = view.getUint32(offset);
+    const type = String.fromCharCode(...bytes.subarray(offset + 4, offset + 8));
+    top.push({ offset, size, type });
+    offset += size;
+  }
+  const firstMoof = top.findIndex((entry) => entry.type === "moof");
+  const segments: Uint8Array[] = [];
+  for (let index = firstMoof; index < top.length; index += 2) {
+    const moof = top[index];
+    const mdat = top[index + 1];
+    assert.equal(moof?.type, "moof");
+    assert.equal(mdat?.type, "mdat");
+    segments.push(bytes.slice(moof.offset, mdat.offset + mdat.size));
+  }
+  return { init: bytes.slice(0, top[firstMoof].offset), segments };
+}
+
+const fixture = fragmentedFixture();
+const initMp4 = fixture.init;
+const mediaSegment = fixture.segments[0];
 
 const finalizedPlaylist = `#EXTM3U
 #EXT-X-VERSION:7
@@ -49,6 +77,10 @@ test("parses finalized HLS with relative map and media URLs", () => {
   const parsed = parseHlsPlaylist(finalizedPlaylist, playlistUrl);
   assert.equal(parsed.finalized, true);
   assert.equal(parsed.durationSeconds, 3.75);
+  assert.deepEqual(
+    parsed.segments.map((segment) => segment.durationSeconds),
+    [1.25, 2.5],
+  );
   assert.equal(parsed.init?.url, "https://api.steel.dev/v1/sessions/session-id/media/init.mp4");
   assert.deepEqual(
     parsed.segments.map((segment) => segment.url),
@@ -82,7 +114,12 @@ test("retries recording-not-ready responses and downloads every authenticated pa
       });
     }
     if (url.endsWith("init.mp4")) return new Response(responseBody(initMp4));
-    if (url.endsWith(".m4s")) return new Response(responseBody(mediaSegment));
+    if (url.endsWith("segment-1.m4s")) {
+      return new Response(responseBody(fixture.segments[0]));
+    }
+    if (url.endsWith("segment-2.m4s")) {
+      return new Response(responseBody(fixture.segments[1]));
+    }
     return new Response("missing", { status: 404 });
   }) as typeof fetch;
 
@@ -97,8 +134,33 @@ test("retries recording-not-ready responses and downloads every authenticated pa
   assert.ok(result);
   assert.equal(playlistCalls, 3);
   assert.equal(result.durationSeconds, 4);
-  assert.equal(result.bytes.byteLength, initMp4.byteLength + mediaSegment.byteLength * 2);
+  assert.deepEqual(listIsoBmffBoxes(result.bytes), [
+    "ftyp",
+    "moov",
+    "mdat",
+  ]);
+  const remuxed = result.bytes.slice().buffer as MP4BoxBuffer;
+  remuxed.fileStart = 0;
+  const parsed = createFile(true);
+  parsed.appendBuffer(remuxed, true);
+  parsed.flush();
+  assert.equal(parsed.getInfo().isFragmented, false);
+  assert.equal(parsed.getInfo().tracks[0]?.nb_samples, 2);
+  const parsedTrack = parsed.getTrackById(1);
+  const mdat = parsed.boxes.find((entry) => entry.type === "mdat");
+  assert.equal(
+    (parsedTrack.mdia.minf.stbl.stco ?? parsedTrack.mdia.minf.stbl.co64).chunk_offsets[0],
+    (mdat?.start ?? 0) + (mdat?.hdr_size ?? 0),
+  );
+  assert.deepEqual(parsed.getTrackSample(1, 0).data, new Uint8Array([0, 0, 0, 1, 9]));
   assert.equal(authenticatedUrls.length, 6);
+});
+
+test("rejects standalone fragmented MP4 output without per-fragment durations", () => {
+  assert.throws(
+    () => finalizeFragmentedMp4(initMp4, [mediaSegment], []),
+    (error) => error instanceof SteelRecordingError && error.code === "INVALID_HLS_DURATION",
+  );
 });
 
 test("returns pending after bounded attempts without an end list", async () => {

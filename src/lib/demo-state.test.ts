@@ -22,7 +22,7 @@ test("player becomes ready only when ready status has a durable video URL", () =
     id: "11111111-1111-4111-8111-111111111111",
     mp4_url: null,
     recording_url: null,
-    recording_object_path: null,
+    recording_file_id: null,
     live_view_url: null,
     session_viewer_url: null,
   };
@@ -30,7 +30,7 @@ test("player becomes ready only when ready status has a durable video URL", () =
   const ready = getDemoPlaybackState({
     ...base,
     status: "ready",
-    recording_object_path: "owner/demo/recording.mp4",
+    recording_file_id: "11111111-1111-4111-8111-111111111111",
   });
   assert.equal(ready.isReady, true);
   assert.equal(ready.videoUrl, stableRecordingUrl(base.id));

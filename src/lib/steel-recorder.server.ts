@@ -2,6 +2,15 @@
 // server; callers must never send the Steel API key or authenticated HLS URLs
 // to the browser.
 
+import { Mp4RemuxError, remuxFragmentedMp4 } from "./mp4-remux.server.ts";
+import type { RuntimeBrowserMetrics } from "../composition/source-viewport.ts";
+import {
+  DEFAULT_RECORDING_LOCALE,
+  localeProfile,
+  type RecordingLocale,
+} from "./recording-locale.ts";
+import { serverEnv } from "./server-env.server.ts";
+
 const STEEL_BASE = "https://api.steel.dev/v1";
 const DEFAULT_CDP_TIMEOUT_MS = 20_000;
 const MAX_RECORDING_BYTES = 500 * 1024 * 1024;
@@ -51,6 +60,7 @@ export type SceneExecutionResult = {
   executed: number;
   completed: boolean;
   diagnostics: ActionDiagnostic[];
+  browserMetrics?: RuntimeBrowserMetrics;
   error?: string;
 };
 
@@ -69,7 +79,7 @@ export class SteelRecordingError extends Error {
 }
 
 function requireSteelKey(): string {
-  const key = process.env.STEEL_API_KEY;
+  const key = serverEnv("STEEL_API_KEY");
   if (!key || key.length < 8) {
     throw new Error("Steel API key not configured. Add STEEL_API_KEY to the server environment.");
   }
@@ -82,13 +92,17 @@ function steelHeaders(key: string, extra?: HeadersInit): Headers {
   return headers;
 }
 
-export async function createSteelSession(startUrl: string): Promise<SteelSession> {
+export async function createSteelSession(
+  _startUrl: string,
+  _recordingLocale: RecordingLocale = DEFAULT_RECORDING_LOCALE,
+): Promise<SteelSession> {
   const key = requireSteelKey();
   const res = await fetch(`${STEEL_BASE}/sessions`, {
     method: "POST",
     headers: steelHeaders(key, { "content-type": "application/json" }),
     body: JSON.stringify({
-      startUrl,
+      // Deliberately omit startUrl. The target application must not load until
+      // CDP locale and request headers have been configured on the blank page.
       dimensions: { width: 1280, height: 800 },
       solveCaptcha: false,
       blockAds: true,
@@ -122,10 +136,22 @@ export async function createSteelSession(startUrl: string): Promise<SteelSession
 
 export async function releaseSteelSession(sessionId: string): Promise<SteelSession> {
   const key = requireSteelKey();
-  const res = await fetch(`${STEEL_BASE}/sessions/${encodeURIComponent(sessionId)}/release`, {
-    method: "POST",
-    headers: steelHeaders(key),
-  });
+  let res: Response | null = null;
+  for (let attempt = 1; attempt <= 4; attempt += 1) {
+    try {
+      res = await fetch(`${STEEL_BASE}/sessions/${encodeURIComponent(sessionId)}/release`, {
+        method: "POST",
+        headers: steelHeaders(key),
+      });
+    } catch (error) {
+      if (attempt >= 4) throw error;
+      await delay(250 * 2 ** (attempt - 1));
+      continue;
+    }
+    if (![429, 502, 503, 504].includes(res.status) || attempt >= 4) break;
+    await delay(250 * 2 ** (attempt - 1));
+  }
+  if (!res) throw new Error("Steel session release returned no response.");
 
   // Release is idempotent. Steel may report a missing/already-released session
   // after the first successful call.
@@ -159,36 +185,66 @@ export async function getSteelSession(sessionId: string): Promise<Record<string,
 
 export async function openCdp(websocketUrl: string): Promise<WebSocket> {
   const upgradeUrl = websocketUrl.replace(/^ws/, "http");
-  try {
-    const res = await fetch(upgradeUrl, { headers: { Upgrade: "websocket" } });
-    const socket = (res as unknown as { webSocket?: WebSocket }).webSocket;
-    if (socket) {
-      (socket as unknown as { accept: () => void }).accept();
-      return socket;
+  const attempts = 4;
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      const res = await fetch(upgradeUrl, { headers: { Upgrade: "websocket" } });
+      const socket = (res as unknown as { webSocket?: WebSocket }).webSocket;
+      if (socket) {
+        (socket as unknown as { accept: () => void }).accept();
+        return socket;
+      }
+    } catch {
+      // Fall through to the standard WebSocket client used by local Node.
     }
-  } catch {
-    // Fall through to the standard WebSocket client used by local Node.
+
+    if (typeof WebSocket !== "undefined") {
+      try {
+        return await new Promise<WebSocket>((resolve, reject) => {
+          const socket = new WebSocket(websocketUrl);
+          const cleanup = () => {
+            clearTimeout(timer);
+            socket.removeEventListener("open", onOpen);
+            socket.removeEventListener("error", onError);
+          };
+          const onOpen = () => {
+            cleanup();
+            resolve(socket);
+          };
+          const onError = () => {
+            cleanup();
+            try {
+              socket.close();
+            } catch {
+              /* ignore */
+            }
+            reject(new Error("Could not connect to the cloud browser session."));
+          };
+          const timer = setTimeout(() => {
+            cleanup();
+            try {
+              socket.close();
+            } catch {
+              /* ignore */
+            }
+            reject(new Error("Timed out connecting to the cloud browser."));
+          }, 8_000);
+          socket.addEventListener("open", onOpen);
+          socket.addEventListener("error", onError);
+        });
+      } catch {
+        // Steel can return a session just before its browser endpoint is ready.
+      }
+    }
+
+    if (attempt < attempts) await delay(500 * attempt);
   }
 
   if (typeof WebSocket === "undefined") {
     throw new Error("This runtime cannot open a CDP WebSocket to the cloud browser.");
   }
-
-  return await new Promise<WebSocket>((resolve, reject) => {
-    const socket = new WebSocket(websocketUrl);
-    const timer = setTimeout(
-      () => reject(new Error("Timed out connecting to the cloud browser.")),
-      15_000,
-    );
-    socket.addEventListener("open", () => {
-      clearTimeout(timer);
-      resolve(socket);
-    });
-    socket.addEventListener("error", () => {
-      clearTimeout(timer);
-      reject(new Error("Could not connect to the cloud browser session."));
-    });
-  });
+  throw new Error("Could not connect to the cloud browser session after readiness retries.");
 }
 
 export function cdpCall(
@@ -224,6 +280,64 @@ export function cdpCall(
       JSON.stringify(sessionId ? { id, method, params, sessionId } : { id, method, params }),
     );
   });
+}
+
+export async function configureCdpRecordingLocale(
+  socket: WebSocket,
+  nextId: () => number,
+  sessionId: string,
+  locale: RecordingLocale = DEFAULT_RECORDING_LOCALE,
+): Promise<void> {
+  await cdpCall(socket, nextId(), "Network.enable", {}, sessionId);
+  const profile = localeProfile(locale);
+  if (!profile) return;
+
+  // Emulation has no separate `enable` command in the CDP protocol; invoking
+  // its override commands activates the domain before the first navigation.
+  await cdpCall(
+    socket,
+    nextId(),
+    "Emulation.setLocaleOverride",
+    { locale: profile.locale },
+    sessionId,
+  );
+  await cdpCall(
+    socket,
+    nextId(),
+    "Network.setExtraHTTPHeaders",
+    { headers: { "Accept-Language": profile.acceptLanguage } },
+    sessionId,
+  );
+
+  try {
+    const result = (await cdpCall(
+      socket,
+      nextId(),
+      "Runtime.evaluate",
+      {
+        expression: "({userAgent: navigator.userAgent, platform: navigator.platform})",
+        returnByValue: true,
+      },
+      sessionId,
+    )) as { result?: { value?: { userAgent?: string; platform?: string } } };
+    const userAgent = result.result?.value?.userAgent;
+    if (userAgent) {
+      await cdpCall(
+        socket,
+        nextId(),
+        "Network.setUserAgentOverride",
+        {
+          userAgent,
+          acceptLanguage: profile.acceptLanguage,
+          platform: result.result?.value?.platform ?? "Win32",
+        },
+        sessionId,
+      );
+    }
+  } catch {
+    // Some Chromium builds do not permit the user-agent override on an
+    // attached target. Locale and request headers remain mandatory above.
+  }
 }
 
 export function delay(ms: number) {
@@ -389,6 +503,7 @@ export async function runScenesOverCdp(
   websocketUrl: string,
   actions: CdpAction[],
   maxWallMs = 90_000,
+  recordingLocale: RecordingLocale = DEFAULT_RECORDING_LOCALE,
 ): Promise<SceneExecutionResult> {
   const socket = await openCdp(websocketUrl);
   const deadline = Date.now() + maxWallMs;
@@ -396,6 +511,7 @@ export async function runScenesOverCdp(
   let msgId = 1;
   let executed = 0;
   let error: string | undefined;
+  let browserMetrics: RuntimeBrowserMetrics | undefined;
 
   try {
     const targets = (await cdpCall(socket, msgId++, "Target.getTargets")) as {
@@ -413,6 +529,7 @@ export async function runScenesOverCdp(
 
     await cdpCall(socket, msgId++, "Page.enable", {}, sid);
     await cdpCall(socket, msgId++, "Runtime.enable", {}, sid);
+    await configureCdpRecordingLocale(socket, () => msgId++, sid, recordingLocale);
     const evaluate = (expression: string, timeoutMs?: number) =>
       evaluateValue(socket, msgId++, sid, expression, timeoutMs);
 
@@ -536,6 +653,24 @@ export async function runScenesOverCdp(
         break;
       }
     }
+    try {
+      const metrics = await evaluate(`(() => ({
+        innerWidth: window.innerWidth,
+        innerHeight: window.innerHeight,
+        outerWidth: window.outerWidth,
+        outerHeight: window.outerHeight,
+        screenX: window.screenX,
+        screenY: window.screenY,
+        devicePixelRatio: window.devicePixelRatio || 1,
+        visualViewportWidth: window.visualViewport?.width || window.innerWidth,
+        visualViewportHeight: window.visualViewport?.height || window.innerHeight,
+        visualViewportOffsetLeft: window.visualViewport?.offsetLeft || 0,
+        visualViewportOffsetTop: window.visualViewport?.offsetTop || 0,
+      }))()`);
+      if (metrics && typeof metrics === "object") browserMetrics = metrics as RuntimeBrowserMetrics;
+    } catch {
+      // Recording can still complete; full-frame fallback remains available.
+    }
   } catch (runError) {
     error = runError instanceof Error ? runError.message : String(runError);
   } finally {
@@ -550,13 +685,14 @@ export async function runScenesOverCdp(
     executed,
     completed: !error && executed === actions.length && actions.length > 0,
     diagnostics,
+    browserMetrics,
     error,
   };
 }
 
 // ---- Recording retrieval ---------------------------------------------
 
-export type HlsResource = { url: string };
+export type HlsResource = { url: string; durationSeconds?: number };
 
 export type ParsedHlsPlaylist = {
   finalized: boolean;
@@ -605,6 +741,7 @@ export function parseHlsPlaylist(text: string, playlistUrl: string): ParsedHlsPl
   const segments: HlsResource[] = [];
   const variants: HlsResource[] = [];
   let durationSeconds = 0;
+  let pendingSegmentDuration: number | null = null;
   let expectsSegment = false;
   let expectsVariant = false;
 
@@ -614,14 +751,20 @@ export function parseHlsPlaylist(text: string, playlistUrl: string): ParsedHlsPl
       if (uri) init = { url: new URL(uri, playlistUrl).toString() };
     } else if (line.startsWith("#EXTINF:")) {
       const duration = Number(line.slice(8).split(",", 1)[0]);
-      if (Number.isFinite(duration) && duration >= 0) durationSeconds += duration;
+      if (Number.isFinite(duration) && duration >= 0) {
+        durationSeconds += duration;
+        pendingSegmentDuration = duration;
+      }
       expectsSegment = true;
     } else if (line.startsWith("#EXT-X-STREAM-INF:")) {
       expectsVariant = true;
     } else if (!line.startsWith("#")) {
       const resource = { url: new URL(line, playlistUrl).toString() };
       if (expectsVariant) variants.push(resource);
-      else if (expectsSegment || !variants.length) segments.push(resource);
+      else if (expectsSegment || !variants.length) {
+        segments.push({ ...resource, durationSeconds: pendingSegmentDuration ?? undefined });
+      }
+      pendingSegmentDuration = null;
       expectsSegment = false;
       expectsVariant = false;
     }
@@ -700,6 +843,33 @@ function concatenateBytes(chunks: Uint8Array[]): Uint8Array {
     offset += chunk.byteLength;
   }
   return bytes;
+}
+
+export function finalizeFragmentedMp4(
+  init: Uint8Array,
+  segments: Uint8Array[],
+  durationsSeconds: number[],
+): Uint8Array {
+  validateFragmentedMp4(init, segments);
+  const durationSeconds = durationsSeconds.reduce((sum, duration) => sum + duration, 0);
+  if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) {
+    throw new SteelRecordingError(
+      "INVALID_HLS_DURATION",
+      "Steel returned a finalized recording without a usable duration.",
+      false,
+    );
+  }
+  try {
+    return remuxFragmentedMp4(concatenateBytes([init, ...segments]));
+  } catch (error) {
+    if (error instanceof SteelRecordingError) throw error;
+    const message = error instanceof Mp4RemuxError ? error.message : "Unknown MP4 remux failure.";
+    throw new SteelRecordingError(
+      "MP4_REMUX_FAILED",
+      `Steel recording could not be finalized into a seekable MP4. ${message}`,
+      false,
+    );
+  }
 }
 
 async function downloadResource(
@@ -809,9 +979,9 @@ export async function fetchFinalizedHlsMp4(options: {
         for (const segment of playlist.segments) {
           segments.push(await downloadResource(segment, options.apiKey, fetchImpl, sleep));
         }
-        validateFragmentedMp4(init, segments);
+        const durationsSeconds = playlist.segments.map((segment) => segment.durationSeconds ?? 0);
         return {
-          bytes: concatenateBytes([init, ...segments]),
+          bytes: finalizeFragmentedMp4(init, segments, durationsSeconds),
           durationSeconds: Math.max(1, Math.round(playlist.durationSeconds)),
         };
       }

@@ -30,6 +30,7 @@ import {
   saveProjectMap,
 } from "@/lib/studio.functions";
 import { getDemoPlaybackState, safeRecordingFilename, stableRecordingUrl } from "@/lib/demo-state";
+import type { RecordingLocale } from "@/lib/recording-locale";
 
 export const Route = createFileRoute("/projects/$projectId")({
   head: () => ({
@@ -78,6 +79,7 @@ function ProjectStudio() {
   const [secret, setSecret] = useState("");
   const [demoTitle, setDemoTitle] = useState("");
   const [featurePrompt, setFeaturePrompt] = useState("");
+  const [recordingLocale, setRecordingLocale] = useState<RecordingLocale>("english");
   const [busyAction, setBusyAction] = useState<"map" | "creds" | "demo" | "scan" | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const pollingRef = useRef<Set<string>>(new Set());
@@ -97,14 +99,14 @@ function ProjectStudio() {
       // The browser receives only a masked hint; require the real identifier
       // again whenever access is replaced so a masked value is never encrypted.
       setUsername("");
-      if (!demoTitle) setDemoTitle(`${next.project.name} product demo`);
-      if (!featurePrompt) setFeaturePrompt(defaultFeaturePrompt(next.project.name));
+      setDemoTitle((current) => current || `${next.project.name} product demo`);
+      setFeaturePrompt((current) => current || defaultFeaturePrompt(next.project.name));
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Could not load this project.");
     } finally {
       setLoading(false);
     }
-  }, [demoTitle, featurePrompt, fetchWorkspace, projectId]);
+  }, [fetchWorkspace, projectId]);
 
   useEffect(() => {
     void load();
@@ -207,7 +209,9 @@ function ProjectStudio() {
     setNotice(null);
     setError(null);
     try {
-      const demo = await createDemo({ data: { projectId, title: demoTitle, featurePrompt } });
+      const demo = await createDemo({
+        data: { projectId, title: demoTitle, featurePrompt, recordingLocale },
+      });
       setWorkspace((current) =>
         current ? { ...current, demos: [demo, ...current.demos] } : current,
       );
@@ -491,6 +495,23 @@ function ProjectStudio() {
                       placeholder="Show how a founder creates a campaign, reviews the result, and exports it for social media."
                       className="min-h-32 bg-background"
                     />
+                    <label className="grid gap-1.5 text-sm font-medium">
+                      Recording language
+                      <select
+                        value={recordingLocale}
+                        onChange={(event) =>
+                          setRecordingLocale(event.target.value as RecordingLocale)
+                        }
+                        className="h-10 rounded-md border border-input bg-background px-3 text-sm"
+                      >
+                        <option value="english">English (default)</option>
+                        <option value="arabic">Arabic</option>
+                        <option value="auto">Auto-detect</option>
+                      </select>
+                      <span className="font-normal text-muted-foreground">
+                        English is verified inside the authenticated app before recording continues.
+                      </span>
+                    </label>
                     <Button onClick={handleCreateDemo} disabled={busyAction === "demo"}>
                       {busyAction === "demo" ? <Loader2 className="animate-spin" /> : <Play />}
                       Create + render demo
@@ -517,6 +538,7 @@ function ProjectStudio() {
                     <DemoRow
                       key={demo.id}
                       demo={demo}
+                      projectId={projectId}
                       onRetryFinalization={handleRetryFinalization}
                     />
                   ))}
@@ -532,13 +554,15 @@ function ProjectStudio() {
 
 function DemoRow({
   demo,
+  projectId,
   onRetryFinalization,
 }: {
   demo: Demo;
+  projectId: string;
   onRetryFinalization: (demoId: string) => void;
 }) {
   const { videoUrl, isLive, isReady, liveUrl } = getDemoPlaybackState(demo);
-  const downloadUrl = demo.recording_object_path ? stableRecordingUrl(demo.id, true) : videoUrl;
+  const downloadUrl = demo.recording_file_id ? stableRecordingUrl(demo.id, true) : videoUrl;
   const canRetryFinalization =
     demo.status === "failed" &&
     Boolean(demo.steel_session_id) &&
@@ -565,6 +589,9 @@ function DemoRow({
             ) : null}
           </div>
           <h3 className="mt-2 break-words font-semibold">{demo.title}</h3>
+          <div className="mt-1 text-xs uppercase tracking-wide text-muted-foreground">
+            {demo.recording_locale} recording
+          </div>
           <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">{demo.feature_prompt}</p>
           <div className="mt-2 text-sm text-muted-foreground">{demo.current_step ?? "Queued"}</div>
           {demo.error_message ? (
@@ -595,7 +622,16 @@ function DemoRow({
                 preload="metadata"
                 className="aspect-video w-full rounded-md border border-border bg-black"
               />
-              <div className="grid gap-2 sm:grid-cols-2">
+              <div className="grid gap-2 sm:grid-cols-3">
+                <Button asChild size="sm">
+                  <Link
+                    to="/projects/$projectId/demos/$demoId/editor"
+                    params={{ projectId, demoId: demo.id }}
+                  >
+                    <Sparkles />
+                    Compose
+                  </Link>
+                </Button>
                 <Button asChild variant="outline" size="sm">
                   <a href={downloadUrl ?? videoUrl} download={safeRecordingFilename(demo.title)}>
                     <Download />

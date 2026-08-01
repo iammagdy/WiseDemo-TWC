@@ -1,6 +1,6 @@
 import { defineTool } from "@lovable.dev/mcp-js";
 import { z } from "zod";
-import { supabaseWorkspace } from "../supabase";
+import { appwriteWorkspace } from "../appwrite";
 
 export default defineTool({
   name: "list_demos",
@@ -16,20 +16,25 @@ export default defineTool({
   },
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
   handler: async ({ project_id, status }) => {
-    const supabase = supabaseWorkspace();
-    let query = supabase
-      .from("demos")
-      .select(
-        "id, project_id, title, feature_prompt, status, progress_pct, current_step, duration_seconds, recording_url, live_view_url, error_message, created_at",
-      )
-      .order("created_at", { ascending: false });
-    if (project_id) query = query.eq("project_id", project_id);
-    if (status) query = query.eq("status", status);
-    const { data, error } = await query;
-    if (error) return { content: [{ type: "text", text: error.message }], isError: true };
+    const data = (await appwriteWorkspace().listDemos(project_id))
+      .filter((demo) => !status || demo.status === status)
+      .map((demo) => ({
+        id: demo.id,
+        project_id: demo.project_id,
+        title: demo.title,
+        feature_prompt: demo.feature_prompt,
+        status: demo.status,
+        progress_pct: demo.progress_pct,
+        current_step: demo.current_step,
+        duration_seconds: demo.duration_seconds,
+        recording_url: demo.recording_url,
+        live_view_url: demo.live_view_url,
+        error_message: demo.error_message,
+        created_at: demo.created_at,
+      }));
     return {
-      content: [{ type: "text", text: JSON.stringify(data ?? [], null, 2) }],
-      structuredContent: { demos: data ?? [] },
+      content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
+      structuredContent: { demos: data },
     };
   },
 });

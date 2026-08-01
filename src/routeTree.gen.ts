@@ -17,7 +17,9 @@ import { Route as Char91DotwellKnownChar93OauthProtectedResourceRouteImport } fr
 import { Route as ProjectsProjectIdRouteImport } from './routes/projects.$projectId'
 import { Route as Char91DotmcpChar93InvokeToolToolRouteImport } from './routes/[.mcp]/invoke-tool/$tool'
 import { Route as ApiPublicScreenshotRouteImport } from './routes/api/public/screenshot'
+import { Route as ApiPublicCompositionExportsExportIdRouteImport } from './routes/api/public/composition-exports.$exportId'
 import { Route as ApiPublicDemoRecordingsDemoIdRouteImport } from './routes/api/public/demo-recordings.$demoId'
+import { Route as ProjectsProjectIdDemosDemoIdEditorRouteImport } from './routes/projects.$projectId_.demos.$demoId.editor'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -62,10 +64,22 @@ const ApiPublicScreenshotRoute = ApiPublicScreenshotRouteImport.update({
   path: '/api/public/screenshot',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiPublicCompositionExportsExportIdRoute =
+  ApiPublicCompositionExportsExportIdRouteImport.update({
+    id: '/api/public/composition-exports/$exportId',
+    path: '/api/public/composition-exports/$exportId',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ApiPublicDemoRecordingsDemoIdRoute =
   ApiPublicDemoRecordingsDemoIdRouteImport.update({
     id: '/api/public/demo-recordings/$demoId',
     path: '/api/public/demo-recordings/$demoId',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ProjectsProjectIdDemosDemoIdEditorRoute =
+  ProjectsProjectIdDemosDemoIdEditorRouteImport.update({
+    id: '/projects/$projectId_/demos/$demoId/editor',
+    path: '/projects/$projectId/demos/$demoId/editor',
     getParentRoute: () => rootRouteImport,
   } as any)
 
@@ -78,7 +92,9 @@ export interface FileRoutesByFullPath {
   '/projects/$projectId': typeof ProjectsProjectIdRoute
   '/.mcp/invoke-tool/$tool': typeof Char91DotmcpChar93InvokeToolToolRoute
   '/api/public/screenshot': typeof ApiPublicScreenshotRoute
+  '/api/public/composition-exports/$exportId': typeof ApiPublicCompositionExportsExportIdRoute
   '/api/public/demo-recordings/$demoId': typeof ApiPublicDemoRecordingsDemoIdRoute
+  '/projects/$projectId/demos/$demoId/editor': typeof ProjectsProjectIdDemosDemoIdEditorRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -89,7 +105,9 @@ export interface FileRoutesByTo {
   '/projects/$projectId': typeof ProjectsProjectIdRoute
   '/.mcp/invoke-tool/$tool': typeof Char91DotmcpChar93InvokeToolToolRoute
   '/api/public/screenshot': typeof ApiPublicScreenshotRoute
+  '/api/public/composition-exports/$exportId': typeof ApiPublicCompositionExportsExportIdRoute
   '/api/public/demo-recordings/$demoId': typeof ApiPublicDemoRecordingsDemoIdRoute
+  '/projects/$projectId/demos/$demoId/editor': typeof ProjectsProjectIdDemosDemoIdEditorRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -101,7 +119,9 @@ export interface FileRoutesById {
   '/projects/$projectId': typeof ProjectsProjectIdRoute
   '/.mcp/invoke-tool/$tool': typeof Char91DotmcpChar93InvokeToolToolRoute
   '/api/public/screenshot': typeof ApiPublicScreenshotRoute
+  '/api/public/composition-exports/$exportId': typeof ApiPublicCompositionExportsExportIdRoute
   '/api/public/demo-recordings/$demoId': typeof ApiPublicDemoRecordingsDemoIdRoute
+  '/projects/$projectId_/demos/$demoId/editor': typeof ProjectsProjectIdDemosDemoIdEditorRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -114,7 +134,9 @@ export interface FileRouteTypes {
     | '/projects/$projectId'
     | '/.mcp/invoke-tool/$tool'
     | '/api/public/screenshot'
+    | '/api/public/composition-exports/$exportId'
     | '/api/public/demo-recordings/$demoId'
+    | '/projects/$projectId/demos/$demoId/editor'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -125,7 +147,9 @@ export interface FileRouteTypes {
     | '/projects/$projectId'
     | '/.mcp/invoke-tool/$tool'
     | '/api/public/screenshot'
+    | '/api/public/composition-exports/$exportId'
     | '/api/public/demo-recordings/$demoId'
+    | '/projects/$projectId/demos/$demoId/editor'
   id:
     | '__root__'
     | '/'
@@ -136,7 +160,9 @@ export interface FileRouteTypes {
     | '/projects/$projectId'
     | '/.mcp/invoke-tool/$tool'
     | '/api/public/screenshot'
+    | '/api/public/composition-exports/$exportId'
     | '/api/public/demo-recordings/$demoId'
+    | '/projects/$projectId_/demos/$demoId/editor'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -148,7 +174,9 @@ export interface RootRouteChildren {
   ProjectsProjectIdRoute: typeof ProjectsProjectIdRoute
   Char91DotmcpChar93InvokeToolToolRoute: typeof Char91DotmcpChar93InvokeToolToolRoute
   ApiPublicScreenshotRoute: typeof ApiPublicScreenshotRoute
+  ApiPublicCompositionExportsExportIdRoute: typeof ApiPublicCompositionExportsExportIdRoute
   ApiPublicDemoRecordingsDemoIdRoute: typeof ApiPublicDemoRecordingsDemoIdRoute
+  ProjectsProjectIdDemosDemoIdEditorRoute: typeof ProjectsProjectIdDemosDemoIdEditorRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -209,11 +237,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiPublicScreenshotRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/public/composition-exports/$exportId': {
+      id: '/api/public/composition-exports/$exportId'
+      path: '/api/public/composition-exports/$exportId'
+      fullPath: '/api/public/composition-exports/$exportId'
+      preLoaderRoute: typeof ApiPublicCompositionExportsExportIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/public/demo-recordings/$demoId': {
       id: '/api/public/demo-recordings/$demoId'
       path: '/api/public/demo-recordings/$demoId'
       fullPath: '/api/public/demo-recordings/$demoId'
       preLoaderRoute: typeof ApiPublicDemoRecordingsDemoIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/projects/$projectId_/demos/$demoId/editor': {
+      id: '/projects/$projectId_/demos/$demoId/editor'
+      path: '/projects/$projectId/demos/$demoId/editor'
+      fullPath: '/projects/$projectId/demos/$demoId/editor'
+      preLoaderRoute: typeof ProjectsProjectIdDemosDemoIdEditorRouteImport
       parentRoute: typeof rootRouteImport
     }
   }
@@ -229,7 +271,11 @@ const rootRouteChildren: RootRouteChildren = {
   ProjectsProjectIdRoute: ProjectsProjectIdRoute,
   Char91DotmcpChar93InvokeToolToolRoute: Char91DotmcpChar93InvokeToolToolRoute,
   ApiPublicScreenshotRoute: ApiPublicScreenshotRoute,
+  ApiPublicCompositionExportsExportIdRoute:
+    ApiPublicCompositionExportsExportIdRoute,
   ApiPublicDemoRecordingsDemoIdRoute: ApiPublicDemoRecordingsDemoIdRoute,
+  ProjectsProjectIdDemosDemoIdEditorRoute:
+    ProjectsProjectIdDemosDemoIdEditorRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

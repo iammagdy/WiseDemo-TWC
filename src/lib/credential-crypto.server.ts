@@ -1,5 +1,7 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
 
+import { serverEnv } from "./server-env.server.ts";
+
 export type PasswordCredentials = {
   loginUrl: string;
   username: string;
@@ -17,7 +19,7 @@ export class CredentialCryptoError extends Error {
 }
 
 function credentialKey(keySecret?: string): Buffer {
-  const source = keySecret ?? process.env.WISEDEMO_CREDS_KEY ?? process.env.DEMOFORGE_CREDS_KEY;
+  const source = keySecret ?? serverEnv("WISEDEMO_CREDS_KEY") ?? serverEnv("DEMOFORGE_CREDS_KEY");
   if (!source || source.length < 32) {
     throw new CredentialCryptoError(
       "CREDENTIAL_ENCRYPTION_NOT_CONFIGURED",

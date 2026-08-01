@@ -3,6 +3,7 @@
 
 import type { ReconResult } from "./steel-recon.server";
 import type { CdpAction } from "./steel-recorder.server";
+import { serverEnv } from "./server-env.server.ts";
 
 export type PlannedAction = CdpAction;
 
@@ -111,7 +112,7 @@ export async function planDemoScenes(input: {
   recon: ReconResult | null;
   loginUrl?: string | null;
 }): Promise<{ scenes: PlannedScene[]; source: "ai" | "heuristic" }> {
-  const apiKey = process.env.LOVABLE_API_KEY;
+  const apiKey = serverEnv("LOVABLE_API_KEY");
   const origin = new URL(input.baseUrl).origin;
 
   if (apiKey) {
