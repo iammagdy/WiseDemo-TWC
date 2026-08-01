@@ -1,6 +1,6 @@
 import { defineTool } from "@lovable.dev/mcp-js";
 import { z } from "zod";
-import { supabaseWorkspace } from "../supabase";
+import { appwriteWorkspace } from "../appwrite";
 
 export default defineTool({
   name: "get_project",
@@ -10,22 +10,22 @@ export default defineTool({
   inputSchema: { project_id: z.string().uuid().describe("The project id from list_projects.") },
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
   handler: async ({ project_id }) => {
-    const supabase = supabaseWorkspace();
-    const { data: project, error } = await supabase
-      .from("projects")
-      .select("id, name, base_url, description, site_map_md, site_map_source, site_map_updated_at, created_at")
-      .eq("id", project_id)
-      .maybeSingle();
-    if (error) return { content: [{ type: "text", text: error.message }], isError: true };
+    const repository = appwriteWorkspace();
+    const project = await repository.getProject(project_id);
     if (!project) return { content: [{ type: "text", text: "Project not found." }], isError: true };
 
-    const { data: demos } = await supabase
-      .from("demos")
-      .select("id, title, status, progress_pct, current_step, duration_seconds, recording_url, created_at")
-      .eq("project_id", project_id)
-      .order("created_at", { ascending: false });
+    const demos = (await repository.listDemos(project_id)).map((demo) => ({
+      id: demo.id,
+      title: demo.title,
+      status: demo.status,
+      progress_pct: demo.progress_pct,
+      current_step: demo.current_step,
+      duration_seconds: demo.duration_seconds,
+      recording_url: demo.recording_url,
+      created_at: demo.created_at,
+    }));
 
-    const payload = { project, demos: demos ?? [] };
+    const payload = { project, demos };
     return {
       content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
       structuredContent: payload,

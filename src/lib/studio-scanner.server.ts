@@ -1,3 +1,5 @@
+import { serverEnv } from "./server-env.server.ts";
+
 type ScanLink = {
   label: string;
   url: string;
@@ -71,7 +73,7 @@ export async function scanWebsite(url: string, projectName: string): Promise<Web
 }
 
 async function scanWithFirecrawl(baseUrl: string, projectName: string): Promise<WebsiteScan | null> {
-  const connectionKey = process.env.FIRECRAWL_API_KEY;
+  const connectionKey = serverEnv("FIRECRAWL_API_KEY");
   if (!connectionKey) return null;
 
   try {
@@ -124,8 +126,8 @@ async function scanWithFirecrawl(baseUrl: string, projectName: string): Promise<
 }
 
 async function callFirecrawl<T>(path: "/map" | "/scrape", body: Record<string, unknown>): Promise<T> {
-  const connectionKey = process.env.FIRECRAWL_API_KEY;
-  const lovableKey = process.env.LOVABLE_API_KEY;
+  const connectionKey = serverEnv("FIRECRAWL_API_KEY");
+  const lovableKey = serverEnv("LOVABLE_API_KEY");
   if (!connectionKey) throw new Error("Firecrawl is not connected.");
   const isDirectProviderKey = connectionKey.startsWith("fc-");
   if (!isDirectProviderKey && !lovableKey) throw new Error("Firecrawl gateway is not configured.");
