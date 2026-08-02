@@ -160,6 +160,7 @@ export type DirectorArtifactKind =
   | "public-intelligence"
   | "brand-style"
   | "creative-brief"
+  | "live-account-safety-audit"
   | "capture-plan"
   | "capture-telemetry"
   | "deterministic-qa"

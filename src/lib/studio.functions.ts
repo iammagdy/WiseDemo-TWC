@@ -56,14 +56,29 @@ import {
   GeminiCreativeDirector,
   type CreativeBrief,
 } from "./creative-director.server";
+import {
+  prepareWiseResumeSmartTailoring,
+  auditWiseResumeLiveAccount,
+  verifyWiseResumeSmartTailoringTransformation,
+  type WiseResumeSmartTailoringPlan,
+} from "./product-adapters/wiseresume.server";
+import {
+  LiveAccountSafetyError,
+  assertLiveAccountMutationAllowed,
+  classifyAuthenticatedMap,
+  preSessionSafetyState,
+  serializeLiveAccountSafetyAudit,
+  type LiveAccountSafetyAudit,
+} from "./live-account-safety.server.ts";
 import { runSingleSessionDirectedCapture } from "./single-session-director.server";
+import { withProductLocaleAdapterContext } from "./steel-recon.server";
 
 type WorkspaceContext = { repository: WiseDemoRepository };
 type DirectedPreflight = {
   candidate: FeatureCandidate;
   storyboard: DemoStoryboard;
   actions: CdpAction[];
-  recon: ReconResult;
+  adapterPlan: WiseResumeSmartTailoringPlan;
 };
 
 // Authentication was removed for the experimental stage: every visitor works in
@@ -631,6 +646,35 @@ export const captureDirectedDemo = createServerFn({ method: "POST" })
     if (!parsedBrief.success) throw new Error("This directed demo has no valid creative brief.");
     const brief = parsedBrief.data;
     const { credentials, loginUrl } = await loadCredentials(context, project.id);
+    if (!credentials)
+      throw new Error("Directed WiseResume capture requires encrypted test credentials.");
+    const credentialMeta = await context.repository.getCredential(project.id);
+    const mapState = classifyAuthenticatedMap({
+      credentialSavedAt: credentialMeta?.updated_at,
+      authenticatedMapUpdatedAt: project.site_map_updated_at,
+    });
+    const auditCacheKey = `${briefArtifact.cache_key}:live-account-safety:${credentialMeta?.updated_at ?? "unknown"}`;
+    await context.repository.updateDemo(demo.id, {
+      current_step: preSessionSafetyState(mapState),
+      progress_pct: 42,
+    });
+    await context.repository.createDirectorArtifact({
+      project_id: project.id,
+      demo_id: demo.id,
+      artifact_kind: "live-account-safety-audit",
+      cache_key: auditCacheKey,
+      status: "ready",
+      payload_json: {
+        status: preSessionSafetyState(mapState),
+        authenticatedMapState: mapState,
+      } as Json,
+      expires_at: null,
+      provider: "wisedemo",
+      model: null,
+      duration_ms: null,
+      revision: 0,
+      failure_reason: null,
+    });
     const monotonicNow = () => performance.now();
     try {
       const capture = await runSingleSessionDirectedCapture<
@@ -675,55 +719,122 @@ export const captureDirectedDemo = createServerFn({ method: "POST" })
               });
             }
           : undefined,
-        preflight: async (websocketUrl): Promise<DirectedPreflight> => {
-          if (brief.demoDataPlan.requiredEntities.length) {
-            throw new Error(
-              "The selected feature requires product-specific demo-data preparation. Add a safe product adapter before capture.",
-            );
-          }
-          const recon = await reconSite({
+        liveAccountSafetyAudit: (websocketUrl) =>
+          withProductLocaleAdapterContext({
             websocketUrl,
-            baseUrl: project.base_url,
-            loginUrl: null,
-            credentials: null,
-            maxPages: 2,
             recordingLocale: demo.recording_locale,
-          });
-          const intelligence = buildProductIntelligence({
-            productName: project.name,
-            baseUrl: project.base_url,
-            recon,
-          });
-          const tokens = brief.selectedFeature.name
-            .toLowerCase()
-            .split(/[^a-z0-9]+/)
-            .filter((token) => token.length > 2);
-          const candidate = intelligence.featureCandidates.find((entry) =>
-            tokens.some((token) =>
-              `${entry.name} ${entry.userBenefit} ${entry.userProblem}`
-                .toLowerCase()
-                .includes(token),
-            ),
-          );
-          if (!candidate) {
+            execute: (adapterContext) =>
+              auditWiseResumeLiveAccount(adapterContext, credentials.username),
+          }),
+        assertMutationAllowed: (audit) =>
+          assertLiveAccountMutationAllowed(audit as LiveAccountSafetyAudit | undefined),
+        preflight: async (
+          websocketUrl,
+          _maxWallMs,
+          liveAccountSafetyAudit,
+        ): Promise<DirectedPreflight> => {
+          if (brief.selectedFeature.name !== "Smart Tailoring") {
             throw new Error(
-              "Targeted preflight could not resolve the selected feature from the live DOM without inventing selectors.",
+              "WiseResume directed capture currently supports the validated Smart Tailoring brief only.",
             );
           }
-          const storyboard = createLaunchStoryboard({ productName: project.name, candidate });
-          const actions = storyboard.scenes.flatMap((scene) =>
-            scene.actions.map(storyboardActionToCdp),
-          );
+          const adapterPlan = await withProductLocaleAdapterContext({
+            websocketUrl,
+            recordingLocale: demo.recording_locale,
+            execute: (adapterContext) =>
+              prepareWiseResumeSmartTailoring(adapterContext, {
+                liveAccountSafetyAudit: liveAccountSafetyAudit as
+                  LiveAccountSafetyAudit | undefined,
+              }),
+          });
+          const candidate = {
+            id: crypto.randomUUID(),
+            name: brief.selectedFeature.name,
+            description: brief.selectedFeature.whySelected,
+            userProblem: brief.selectedFeature.userProblem,
+            userBenefit: brief.selectedFeature.userBenefit,
+            requiredState: "A fictional resume and job posting are prepared in WiseResume.",
+            entryUrl: adapterPlan.tailoringUrl,
+            actions: [
+              {
+                id: crypto.randomUUID(),
+                type: "click",
+                label: "Apply Smart Tailoring",
+                selector: adapterPlan.tailoringActionSelector,
+                status: "successful",
+                requiredState: "The fictional job posting is ready for tailoring.",
+                visualChangeScore: 0.9,
+                semanticChangeScore: 0.9,
+                reliabilityScore: 0.9,
+                evidence: [],
+              },
+            ],
+            expectedResult: "Visible tailored resume content with target-role alignment.",
+            visualChangeScore: 0.9,
+            marketingValueScore: 0.9,
+            reliabilityScore: 0.9,
+            confidenceScore: 0.9,
+            estimatedDurationSeconds: brief.targetDurationSeconds,
+            requiredPreparation: ["fictional resume", "fictional job posting"],
+            evidence: [],
+          } as FeatureCandidate;
+          const baseStoryboard = createLaunchStoryboard({ productName: project.name, candidate });
+          const copy = [
+            brief.hook,
+            ...brief.captions.map((caption) => caption.text),
+            brief.proofStatement,
+            brief.callToAction,
+          ];
+          const storyboard: DemoStoryboard = {
+            ...baseStoryboard,
+            title: `${project.name}: ${brief.selectedFeature.name}`,
+            targetAudience: brief.audience,
+            corePromise: brief.corePromise,
+            scenes: baseStoryboard.scenes.map((scene, index) => ({
+              ...scene,
+              headline: copy[Math.min(index, copy.length - 1)],
+              narration: brief.narration[index]?.text ?? "",
+              caption: copy[Math.min(index, copy.length - 1)],
+              expectedResult: candidate.expectedResult,
+            })),
+          };
+          const actions = adapterPlan.finalActions;
           if (!actions.length)
             throw new Error("Targeted preflight did not produce verified final-take actions.");
-          return { candidate, storyboard, actions, recon };
+          return { candidate, storyboard, actions, adapterPlan };
         },
         executeFinalTake: (websocketUrl, maxWallMs, preflight) =>
           runScenesOverCdp(websocketUrl, preflight.actions, maxWallMs, demo.recording_locale, {
             now: monotonicNow,
           }),
+        verifyFinalTake: (websocketUrl, preflight) =>
+          withProductLocaleAdapterContext({
+            websocketUrl,
+            recordingLocale: demo.recording_locale,
+            execute: (adapterContext) =>
+              verifyWiseResumeSmartTailoringTransformation(adapterContext, preflight.adapterPlan),
+          }),
       });
       const preflight = capture.preflight;
+      await context.repository.createDirectorArtifact({
+        project_id: project.id,
+        demo_id: demo.id,
+        artifact_kind: "live-account-safety-audit",
+        cache_key: auditCacheKey,
+        status: "ready",
+        payload_json: {
+          authenticatedMapState: mapState,
+          audit: serializeLiveAccountSafetyAudit(
+            capture.liveAccountSafetyAudit as LiveAccountSafetyAudit,
+          ),
+        } as Json,
+        expires_at: null,
+        provider: "steel.dev",
+        model: null,
+        duration_ms: null,
+        revision: 1,
+        failure_reason: null,
+      });
       const storedStoryboard = await context.repository.createStoryboard({
         project_id: project.id,
         demo_id: demo.id,
@@ -772,6 +883,7 @@ export const captureDirectedDemo = createServerFn({ method: "POST" })
         payload_json: {
           captureIntent: brief.captureIntent,
           takeMarkers: capture.markers,
+          transformationEvidence: capture.verification,
         } as unknown as Json,
         expires_at: null,
         provider: "steel.dev",
@@ -813,6 +925,27 @@ export const captureDirectedDemo = createServerFn({ method: "POST" })
       );
       return withDurableRecordingUrl(rendering);
     } catch (error) {
+      if (error instanceof LiveAccountSafetyError) {
+        await context.repository
+          .createDirectorArtifact({
+            project_id: project.id,
+            demo_id: demo.id,
+            artifact_kind: "live-account-safety-audit",
+            cache_key: auditCacheKey,
+            status: error.audit.status === "unsafe" ? "failed" : "unavailable",
+            payload_json: {
+              authenticatedMapState: mapState,
+              audit: serializeLiveAccountSafetyAudit(error.audit),
+            } as Json,
+            expires_at: null,
+            provider: "steel.dev",
+            model: null,
+            duration_ms: null,
+            revision: 1,
+            failure_reason: error.audit.reasons.join(" ").slice(0, 300),
+          })
+          .catch(() => undefined);
+      }
       const message =
         error instanceof Error ? error.message : "Directed one-session capture failed.";
       const failed = await context.repository.updateDemo(demo.id, {

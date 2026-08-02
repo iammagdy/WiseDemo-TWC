@@ -61,18 +61,31 @@ export function captureEventsFromExecution(
 export async function runSingleSessionDirectedCapture<
   Session extends RecordingSessionLike,
   Preflight,
+  Verification = unknown,
+  LiveAudit = unknown,
 >(options: {
   startUrl: string;
   createSession: (startUrl: string) => Promise<Session>;
   releaseSession: (sessionId: string) => Promise<Session>;
   publishLiveSession: (session: Session) => Promise<void>;
   authenticate?: (websocketUrl: string) => Promise<void>;
-  preflight: (websocketUrl: string, maxWallMs: number) => Promise<Preflight>;
+  liveAccountSafetyAudit?: (websocketUrl: string) => Promise<LiveAudit>;
+  assertMutationAllowed?: (audit: LiveAudit | undefined) => void;
+  preflight: (
+    websocketUrl: string,
+    maxWallMs: number,
+    liveAccountSafetyAudit: LiveAudit | undefined,
+  ) => Promise<Preflight>;
   executeFinalTake: (
     websocketUrl: string,
     maxWallMs: number,
     preflight: Preflight,
   ) => Promise<SceneExecutionResult>;
+  verifyFinalTake?: (
+    websocketUrl: string,
+    preflight: Preflight,
+    execution: SceneExecutionResult,
+  ) => Promise<Verification>;
   finalActions: CdpAction[] | ((preflight: Preflight) => CdpAction[]);
   preflightMaxMs?: number;
   sleep?: (milliseconds: number) => Promise<unknown>;
@@ -83,6 +96,8 @@ export async function runSingleSessionDirectedCapture<
   preflight: Preflight;
   markers: TakeMarkers;
   execution: SceneExecutionResult;
+  verification: Verification | undefined;
+  liveAccountSafetyAudit: LiveAudit | undefined;
   telemetry: CaptureEvent[];
 }> {
   const now = options.now ?? (() => performance.now());
@@ -99,8 +114,13 @@ export async function runSingleSessionDirectedCapture<
     const websocketUrl = session.websocketUrl;
     await options.publishLiveSession(session);
     if (options.authenticate) await options.authenticate(websocketUrl);
+    const liveAccountSafetyAudit = options.liveAccountSafetyAudit
+      ? await options.liveAccountSafetyAudit(websocketUrl)
+      : undefined;
+    options.assertMutationAllowed?.(liveAccountSafetyAudit);
     const preflight = await executeWithinBudget(
-      () => options.preflight(websocketUrl, options.preflightMaxMs ?? 20_000),
+      () =>
+        options.preflight(websocketUrl, options.preflightMaxMs ?? 20_000, liveAccountSafetyAudit),
       options.preflightMaxMs ?? 20_000,
     );
     const takeStartedAtMs = now();
@@ -110,6 +130,9 @@ export async function runSingleSessionDirectedCapture<
     );
     if (!execution.completed)
       throw new Error(execution.error ?? "The directed final take did not complete.");
+    const verification = options.verifyFinalTake
+      ? await options.verifyFinalTake(websocketUrl, preflight, execution)
+      : undefined;
     const holdMs = recordingHoldMs(now() - takeStartedAtMs);
     if (holdMs > 0) await sleep(holdMs);
     const takeEndedAtMs = now();
@@ -124,8 +147,10 @@ export async function runSingleSessionDirectedCapture<
       session,
       releasedSession,
       preflight,
+      liveAccountSafetyAudit,
       markers,
       execution,
+      verification,
       telemetry: captureEventsFromExecution(finalActions, execution),
     };
   } catch (error) {

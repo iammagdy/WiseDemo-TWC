@@ -62,3 +62,58 @@ test("directed capture uses one session and records a trim-ready take", async ()
   assert.ok(result.markers.takeEndedAtMs > result.markers.takeStartedAtMs);
   assert.equal(result.telemetry[0].boundingBox?.width, 40);
 });
+
+test("directed capture verifies the final take before recording its end marker", async () => {
+  let time = 0;
+  const result = await runSingleSessionDirectedCapture({
+    startUrl: "https://product.example.test",
+    createSession: async () => ({ id: "steel-1", websocketUrl: "ws://steel" }),
+    releaseSession: async () => ({ id: "steel-1" }),
+    publishLiveSession: async () => undefined,
+    preflight: async () => "prepared",
+    executeFinalTake: async () => ({ executed: 1, completed: true, diagnostics: [] }),
+    verifyFinalTake: async () => {
+      time = 500;
+      return { transformed: true };
+    },
+    finalActions: [],
+    sleep: async () => undefined,
+    now: () => time,
+  });
+  assert.deepEqual(result.verification, { transformed: true });
+  assert.ok(result.markers.takeEndedAtMs >= 500);
+});
+
+test("unsafe live safety audit releases the only session before mutation", async () => {
+  let created = 0;
+  let released = 0;
+  let preflightCalled = false;
+  await assert.rejects(
+    runSingleSessionDirectedCapture({
+      startUrl: "https://product.example.test",
+      createSession: async () => {
+        created += 1;
+        return { id: "steel-1", websocketUrl: "ws://steel" };
+      },
+      releaseSession: async () => {
+        released += 1;
+        return { id: "steel-1" };
+      },
+      publishLiveSession: async () => undefined,
+      liveAccountSafetyAudit: async () => ({ status: "unsafe" }),
+      assertMutationAllowed: (audit) => {
+        if (audit?.status !== "safe") throw new Error("unsafe account");
+      },
+      preflight: async () => {
+        preflightCalled = true;
+        return "should not run";
+      },
+      executeFinalTake: async () => ({ executed: 0, completed: true, diagnostics: [] }),
+      finalActions: [],
+    }),
+    /unsafe account/,
+  );
+  assert.equal(created, 1);
+  assert.equal(released, 1);
+  assert.equal(preflightCalled, false);
+});

@@ -541,6 +541,23 @@ function productLocaleAdapterContext(cdp: Cdp): ProductLocaleAdapterContext {
   };
 }
 
+export async function withProductLocaleAdapterContext<T>(input: {
+  websocketUrl: string;
+  recordingLocale: RecordingLocale;
+  execute: (context: ProductLocaleAdapterContext) => Promise<T>;
+}): Promise<T> {
+  const cdp = await attach(input.websocketUrl, input.recordingLocale);
+  try {
+    return await input.execute(productLocaleAdapterContext(cdp));
+  } finally {
+    try {
+      cdp.socket.close();
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
 async function ensureApplicationLocale(
   cdp: Cdp,
   locale: RecordingLocale,
