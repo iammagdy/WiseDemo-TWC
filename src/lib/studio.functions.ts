@@ -242,6 +242,41 @@ async function createDirectorBrief(
     );
   }
   const { credentials } = await loadCredentials(context, project.id);
+  const requestedFeatureBrief = input.featureBrief?.trim().toLocaleLowerCase();
+  const cachedBrief = requestedFeatureBrief
+    ? (await context.repository.listDirectorArtifacts(project.id))
+        .filter(
+          (artifact) => artifact.artifact_kind === "creative-brief" && artifact.status === "ready",
+        )
+        .sort((left, right) => right.updated_at.localeCompare(left.updated_at))
+        .map((artifact) => ({
+          artifact,
+          parsed: creativeBriefSchema.safeParse(artifact.payload_json),
+        }))
+        .find(
+          ({ parsed }) =>
+            parsed.success &&
+            requestedFeatureBrief.includes(parsed.data.selectedFeature.name.toLocaleLowerCase()),
+        )
+    : undefined;
+  if (cachedBrief && cachedBrief.parsed.success) {
+    const brief = cachedBrief.parsed.data;
+    await context.repository.createDirectorArtifact({
+      project_id: project.id,
+      demo_id: input.demoId ?? null,
+      artifact_kind: "creative-brief",
+      cache_key: cachedBrief.artifact.cache_key,
+      status: "ready",
+      payload_json: brief as unknown as Json,
+      expires_at: cachedBrief.artifact.expires_at,
+      provider: cachedBrief.artifact.provider,
+      model: cachedBrief.artifact.model,
+      duration_ms: cachedBrief.artifact.duration_ms,
+      revision: cachedBrief.artifact.revision + 1,
+      failure_reason: null,
+    });
+    return { brief, intelligence };
+  }
   const { createGeminiClient } = await import("@/integrations/gemini/gemini-client.server");
   const director = new GeminiCreativeDirector(createGeminiClient());
   const brief = await director.createBrief({
@@ -266,6 +301,11 @@ async function createDirectorBrief(
     failure_reason: null,
   });
   return { brief, intelligence };
+}
+
+function boundedArtifactCacheKey(base: string, suffix: string): string {
+  const safeSuffix = suffix.slice(-127);
+  return `${base.slice(0, Math.max(0, 127 - safeSuffix.length))}:${safeSuffix}`;
 }
 
 export const createProject = createServerFn({ method: "POST" })
@@ -653,7 +693,10 @@ export const captureDirectedDemo = createServerFn({ method: "POST" })
       credentialSavedAt: credentialMeta?.updated_at,
       authenticatedMapUpdatedAt: project.site_map_updated_at,
     });
-    const auditCacheKey = `${briefArtifact.cache_key}:live-account-safety:${credentialMeta?.updated_at ?? "unknown"}`;
+    const auditCacheKey = boundedArtifactCacheKey(
+      briefArtifact.cache_key,
+      `live-account-safety:${credentialMeta?.updated_at ?? "unknown"}`,
+    );
     await context.repository.updateDemo(demo.id, {
       current_step: preSessionSafetyState(mapState),
       progress_pct: 42,
@@ -878,7 +921,7 @@ export const captureDirectedDemo = createServerFn({ method: "POST" })
         project_id: project.id,
         demo_id: demo.id,
         artifact_kind: "capture-plan",
-        cache_key: `${briefArtifact.cache_key}:capture-plan`,
+        cache_key: boundedArtifactCacheKey(briefArtifact.cache_key, "capture-plan"),
         status: "ready",
         payload_json: {
           captureIntent: brief.captureIntent,
@@ -896,7 +939,7 @@ export const captureDirectedDemo = createServerFn({ method: "POST" })
         project_id: project.id,
         demo_id: demo.id,
         artifact_kind: "capture-telemetry",
-        cache_key: `${briefArtifact.cache_key}:telemetry`,
+        cache_key: boundedArtifactCacheKey(briefArtifact.cache_key, "telemetry"),
         status: "ready",
         payload_json: capture.telemetry as unknown as Json,
         expires_at: null,
