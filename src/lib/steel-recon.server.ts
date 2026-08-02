@@ -719,11 +719,15 @@ async function signIn(
   onPrivacyShieldCheckpoint?: (result: PrivacyShieldCheckpointResult) => Promise<void> | void,
 ): Promise<PageOutline> {
   await goto(cdp, target, 3500);
-  if (privacyShielded)
-    await onPrivacyShieldCheckpoint?.(await ensurePrivacyShieldInCdp(cdp, "after-login-page-load"));
-  const filled = (await evaluate(
-    cdp,
-    `(() => {
+  const assertShield = async (checkpoint: string) => {
+    const result = await ensurePrivacyShieldInCdp(cdp, checkpoint);
+    await onPrivacyShieldCheckpoint?.(result);
+  };
+  if (privacyShielded) await assertShield("after-login-page-load");
+  const submitLogin = async () =>
+    (await evaluate(
+      cdp,
+      `(() => {
       const user = document.querySelector('input[type="email"], input[name="email"], input[name="username"], input[autocomplete="username"], input[type="text"]');
       const pass = document.querySelector('input[type="password"], input[name="password"]');
       if (!user || !pass) return { filled: false, submitted: false };
@@ -746,23 +750,40 @@ async function signIn(
       else if (form) form.requestSubmit ? form.requestSubmit() : form.submit();
       return { filled: userApplied && passApplied, submitted: Boolean(submit || form) };
     })()`,
-  )) as { filled?: boolean; submitted?: boolean } | null;
-  if (!filled?.filled || !filled.submitted) {
-    throw new Error("Stored credential fields could not be filled and submitted.");
-  }
-
-  const leftLoginForm = await waitUntil(
-    cdp,
-    `(() => {
-      const password = document.querySelector('input[type="password"], input[name="password"]');
-      return !password;
-    })()`,
-    15_000,
-  );
-  if (privacyShielded)
-    await onPrivacyShieldCheckpoint?.(
-      await ensurePrivacyShieldInCdp(cdp, "after-submitting-login"),
+    )) as { filled?: boolean; submitted?: boolean } | null;
+  let filled: { filled?: boolean; submitted?: boolean } | null = null;
+  let leftLoginForm = false;
+  const waitForAuthenticatedTransition = async () => {
+    leftLoginForm = await waitUntil(
+      cdp,
+      `(() => {
+        const password = document.querySelector('input[type="password"], input[name="password"]');
+        return !password;
+      })()`,
+      15_000,
     );
+    if (!leftLoginForm)
+      throw new Error("Stored credential sign-in did not reach an authenticated screen.");
+  };
+  if (privacyShielded) {
+    const { executeShieldedNavigationAction } = await import("./shielded-navigation.server.ts");
+    await executeShieldedNavigationAction({
+      checkpointBefore: "before-login-submission",
+      checkpointAfter: "after-submitting-login",
+      assertPrivacyShield: assertShield,
+      action: async () => {
+        filled = await submitLogin();
+        if (!filled?.filled || !filled.submitted)
+          throw new Error("Stored credential fields could not be filled and submitted.");
+      },
+      waitForTransition: waitForAuthenticatedTransition,
+    });
+  } else {
+    filled = await submitLogin();
+    if (!filled?.filled || !filled.submitted)
+      throw new Error("Stored credential fields could not be filled and submitted.");
+    await waitForAuthenticatedTransition();
+  }
   const afterLogin = privacyShielded
     ? {
         url: (await evaluate(cdp, "location.href")) as string,
@@ -777,17 +798,14 @@ async function signIn(
   if (!afterLogin) {
     throw new Error("Could not inspect the page after credential sign-in.");
   }
-  if (privacyShielded)
-    await onPrivacyShieldCheckpoint?.(
-      await ensurePrivacyShieldInCdp(cdp, "after-authenticated-redirect"),
-    );
+  if (privacyShielded) await assertShield("after-authenticated-redirect");
   const stillOnLogin = privacyShielded
     ? !leftLoginForm
     : /password/i.test(JSON.stringify(afterLogin.inputs));
   if (
     !isVerifiedLoginOutcome({
-      fieldsApplied: filled.filled === true,
-      submitted: filled.submitted === true,
+      fieldsApplied: filled?.filled === true,
+      submitted: filled?.submitted === true,
       loginFormGone: leftLoginForm,
       outlineHasPasswordField: stillOnLogin,
     })
@@ -816,11 +834,33 @@ export async function authenticateSite(input: {
       input.privacyShielded === true,
       input.onPrivacyShieldCheckpoint,
     );
-    const localeState = await ensureApplicationLocale(cdp, recordingLocale);
-    if (input.privacyShielded)
-      await input.onPrivacyShieldCheckpoint?.(
-        await ensurePrivacyShieldInCdp(cdp, "after-locale-navigation"),
-      );
+    let localeState: ApplicationLocaleState | null = null;
+    if (input.privacyShielded) {
+      const { executeShieldedNavigationAction } = await import("./shielded-navigation.server.ts");
+      await executeShieldedNavigationAction({
+        checkpointBefore: "before-locale-control",
+        checkpointAfter: "after-locale-navigation",
+        assertPrivacyShield: async (checkpoint) => {
+          await input.onPrivacyShieldCheckpoint?.(await ensurePrivacyShieldInCdp(cdp, checkpoint));
+        },
+        action: async () => {
+          localeState = await ensureApplicationLocale(cdp, recordingLocale);
+        },
+        waitForTransition: async () => {
+          if (
+            !(await waitUntil(
+              cdp,
+              'document.readyState === "interactive" || document.readyState === "complete"',
+              12_000,
+            ))
+          )
+            throw new Error("Application locale transition did not settle.");
+        },
+      });
+    } else {
+      localeState = await ensureApplicationLocale(cdp, recordingLocale);
+    }
+    if (!localeState) throw new Error("Application locale could not be verified after transition.");
     const authenticatedOutline = input.privacyShielded
       ? {
           url: (await evaluate(cdp, "location.href")) as string,

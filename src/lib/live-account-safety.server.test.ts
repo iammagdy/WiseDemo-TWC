@@ -60,4 +60,5 @@ test("sanitized audit persistence excludes body and credential fields", () => {
   );
   assert.doesNotMatch(serialized, /resumeBody|username|password|credential|secret/i);
   assert.match(serialized, /"status":"safe"/);
+  assert.match(serialized, /"identityEvidence"/);
 });

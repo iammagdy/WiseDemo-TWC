@@ -1,9 +1,12 @@
+import type { WiseResumeIdentityEvidence } from "./wiseresume-identity.server.ts";
+
 export type AuthenticatedMapState = "authoritative" | "stale" | "pending-live-account-safety-audit";
 
 export type LiveAccountSafetyAudit = {
   status: "safe" | "unsafe" | "inconclusive";
   mode: "empty-account" | "fixture-isolation";
   authenticatedAccountConfirmed: boolean;
+  identityEvidence?: WiseResumeIdentityEvidence;
   totalResumeCount: number;
   fixtureResumeCount: number;
   nonFixtureResumeCount: number;
@@ -72,6 +75,19 @@ export function serializeLiveAccountSafetyAudit(audit: LiveAccountSafetyAudit) {
     status: audit.status,
     mode: audit.mode,
     authenticatedAccountConfirmed: audit.authenticatedAccountConfirmed,
+    identityEvidence: audit.identityEvidence
+      ? {
+          source: audit.identityEvidence.source,
+          sourceAvailable: audit.identityEvidence.sourceAvailable,
+          authenticatedAccountConfirmed: audit.identityEvidence.authenticatedAccountConfirmed,
+          confidence: audit.identityEvidence.confidence,
+        }
+      : {
+          source: "unavailable",
+          sourceAvailable: false,
+          authenticatedAccountConfirmed: false,
+          confidence: 0,
+        },
     totalResumeCount: audit.totalResumeCount,
     fixtureResumeCount: audit.fixtureResumeCount,
     nonFixtureResumeCount: audit.nonFixtureResumeCount,

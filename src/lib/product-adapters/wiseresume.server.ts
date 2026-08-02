@@ -708,39 +708,29 @@ export function evaluateWiseResumeAuthenticatedIdentity(input: {
 async function readWiseResumeAuthenticatedIdentity(
   context: ProductLocaleAdapterContext,
   expectedAccountFingerprint: string,
-): Promise<{ identitySourceAvailable: boolean; authenticatedAccountConfirmed: boolean }> {
-  const response = asRecord(
-    await context.evaluate(`(async () => {
-      const fingerprint = (value) => {
-        let hash = 2166136261;
-        for (const character of value.trim().toLowerCase()) {
-          hash ^= character.charCodeAt(0);
-          hash = Math.imul(hash, 16777619);
-        }
-        return (hash >>> 0).toString(16);
-      };
-      try {
-        const accountResponse = await fetch("https://fra.cloud.appwrite.io/v1/account", {
-          credentials: "include",
-          headers: { "X-Appwrite-Project": "69fd362b001eb325a192" },
-        });
-        if (!accountResponse.ok)
-          return { identitySourceAvailable: false, liveAccountFingerprint: null };
-        const account = await accountResponse.json();
-        const identifier = typeof account.email === "string" ? account.email : "";
-        return {
-          identitySourceAvailable: identifier.length > 0,
-          liveAccountFingerprint: identifier ? fingerprint(identifier) : null,
-        };
-      } catch {
-        return { identitySourceAvailable: false, liveAccountFingerprint: null };
-      }
-    })()`),
-  );
-  return evaluateWiseResumeAuthenticatedIdentity({
-    identitySourceAvailable: response?.identitySourceAvailable === true,
+): Promise<import("../wiseresume-identity.server.ts").WiseResumeIdentityEvidence> {
+  const {
+    resolveWiseResumeIdentity,
+    wiseResumeAppwriteAccountIdentityExpression,
+    wiseResumeScopedAccountControlIdentityExpression,
+  } = await import("../wiseresume-identity.server.ts");
+  const primary = asRecord(await context.evaluate(wiseResumeAppwriteAccountIdentityExpression()));
+  const fallback =
+    primary?.sourceAvailable === true
+      ? null
+      : asRecord(await context.evaluate(wiseResumeScopedAccountControlIdentityExpression()));
+  return resolveWiseResumeIdentity({
     expectedAccountFingerprint,
-    liveAccountFingerprint: asString(response?.liveAccountFingerprint),
+    primary: {
+      sourceAvailable: primary?.sourceAvailable === true,
+      liveAccountFingerprint: asString(primary?.liveAccountFingerprint),
+    },
+    fallback: fallback
+      ? {
+          sourceAvailable: fallback.sourceAvailable === true,
+          liveAccountFingerprint: asString(fallback.liveAccountFingerprint),
+        }
+      : undefined,
   });
 }
 
@@ -778,16 +768,28 @@ export async function auditWiseResumeFixtureIsolationAccount(
     authenticatedAccountConfirmed: identity.authenticatedAccountConfirmed,
     storedFixture: input.storedFixture,
   });
-  if (!identity.identitySourceAvailable && audit.status !== "unsafe") {
+  if (!identity.sourceAvailable && audit.status !== "unsafe") {
     return {
       ...audit,
+      identityEvidence: identity,
       status: "inconclusive",
       reasons: [...audit.reasons, "Authenticated account identity source was unavailable."],
+    };
+  }
+  if (identity.sourceAvailable && !identity.authenticatedAccountConfirmed) {
+    return {
+      ...audit,
+      identityEvidence: identity,
+      status: "unsafe",
+      fixtureIsolated: false,
+      mutationScopeLockedToFixture: false,
+      reasons: ["Authenticated account identity did not match the configured credential."],
     };
   }
   if (!facts.inventoryResolved && audit.status === "safe") {
     return {
       ...audit,
+      identityEvidence: identity,
       status: "inconclusive",
       reasons: ["Resume inventory could not be resolved."],
     };
@@ -801,7 +803,43 @@ export async function auditWiseResumeFixtureIsolationAccount(
       reasons: ["Persisted fixture scope does not match the authenticated account."],
     };
   }
-  return audit;
+  return { ...audit, identityEvidence: identity };
+}
+
+async function executeWiseResumeShieldedNavigationAction(input: {
+  checkpointBefore: string;
+  checkpointAfter: string;
+  assertPrivacyShield: ((checkpoint: string) => Promise<void>) | undefined;
+  action: () => Promise<void>;
+  waitForTransition: () => Promise<void>;
+}): Promise<void> {
+  const assertPrivacyShield = input.assertPrivacyShield;
+  if (!assertPrivacyShield) {
+    await input.action();
+    await input.waitForTransition();
+    return;
+  }
+  const { executeShieldedNavigationAction } = await import("../shielded-navigation.server.ts");
+  await executeShieldedNavigationAction({
+    checkpointBefore: input.checkpointBefore,
+    checkpointAfter: input.checkpointAfter,
+    assertPrivacyShield,
+    action: input.action,
+    waitForTransition: input.waitForTransition,
+  });
+}
+
+async function gotoWiseResumeFixtureWithShield(input: {
+  context: ProductLocaleAdapterContext;
+  url: string;
+  waitMs: number;
+  checkpointBefore: string;
+  checkpointAfter: string;
+  assertPrivacyShield: ((checkpoint: string) => Promise<void>) | undefined;
+}): Promise<void> {
+  await input.assertPrivacyShield?.(input.checkpointBefore);
+  await input.context.goto(input.url, input.waitMs);
+  await input.assertPrivacyShield?.(input.checkpointAfter);
 }
 
 async function resolveWiseResumeFixtureRoute(
@@ -828,18 +866,30 @@ async function createWiseResumeFixture(
   context: ProductLocaleAdapterContext,
   selector: string,
   accountFingerprint: string,
+  assertPrivacyShield: ((checkpoint: string) => Promise<void>) | undefined,
 ): Promise<{ fixture: WiseResumeFixtureReference; resumeUrl: string }> {
-  const created = await context.evaluate(
-    `(() => { const target = document.querySelector(${JSON.stringify(selector)}); if (!target) return false; target.click(); return true; })()`,
-  );
-  if (created !== true) throw new Error("WiseResume fixture creation control was not actionable.");
-  if (
-    !(await context.waitUntil(
-      'document.readyState === "interactive" || document.readyState === "complete"',
-      12_000,
-    ))
-  )
-    throw new Error("WiseResume fixture creation did not settle.");
+  let created: unknown;
+  await executeWiseResumeShieldedNavigationAction({
+    checkpointBefore: "before-fixture-creation-click",
+    checkpointAfter: "after-fixture-creation-transition",
+    assertPrivacyShield,
+    action: async () => {
+      created = await context.evaluate(
+        `(() => { const target = document.querySelector(${JSON.stringify(selector)}); if (!target) return false; target.click(); return true; })()`,
+      );
+      if (created !== true)
+        throw new Error("WiseResume fixture creation control was not actionable.");
+    },
+    waitForTransition: async () => {
+      if (
+        !(await context.waitUntil(
+          'document.readyState === "interactive" || document.readyState === "complete"',
+          12_000,
+        ))
+      )
+        throw new Error("WiseResume fixture creation did not settle.");
+    },
+  });
   const resumeUrl = await context.evaluate("location.href");
   if (typeof resumeUrl !== "string")
     throw new Error("WiseResume fixture route could not be resolved.");
@@ -917,6 +967,7 @@ export async function prepareWiseResumeFixtureSmartTailoring(
         context,
         route.createSelector,
         input.accountFingerprint,
+        input.assertPrivacyShield,
       );
       fixture = created.fixture;
       resumeUrl = created.resumeUrl;
@@ -933,9 +984,16 @@ export async function prepareWiseResumeFixtureSmartTailoring(
     targetResumeId: route.recordId,
     operation: "prepare fixture resume",
   });
-  await input.assertPrivacyShield?.("before-fixture-resume-navigation");
-  await context.goto(resumeUrl, 1_200);
+  await gotoWiseResumeFixtureWithShield({
+    context,
+    url: resumeUrl,
+    waitMs: 1_200,
+    checkpointBefore: "before-fixture-resume-navigation",
+    checkpointAfter: "after-fixture-resume-navigation",
+    assertPrivacyShield: input.assertPrivacyShield,
+  });
   const fixtureDocument = [WISE_RESUME_FIXTURE_TITLE, resumeDocument(resume)].join("\n");
+  await input.assertPrivacyShield?.("before-fixture-resume-mutation");
   const prepared = asRecord(
     await context.evaluate(
       wiseResumeFixtureWriteExpression({
@@ -962,15 +1020,37 @@ export async function prepareWiseResumeFixtureSmartTailoring(
   const workflowHref = asString(workflow?.href);
   const workflowSelector = asString(workflow?.selector);
   if (workflowHref && workflow?.origin === route.origin) {
-    await input.assertPrivacyShield?.("before-fixture-workflow-navigation");
-    await context.goto(workflowHref, 1_200);
+    await gotoWiseResumeFixtureWithShield({
+      context,
+      url: workflowHref,
+      waitMs: 1_200,
+      checkpointBefore: "before-fixture-workflow-navigation",
+      checkpointAfter: "after-fixture-workflow-navigation",
+      assertPrivacyShield: input.assertPrivacyShield,
+    });
   } else if (workflowSelector) {
-    const opened = await context.evaluate(
-      `(() => { const target = document.querySelector(${JSON.stringify(workflowSelector)}); if (!target) return false; target.click(); return true; })()`,
-    );
-    if (opened !== true)
-      throw new Error("WiseResume Smart Tailoring workflow could not be opened safely.");
-    await context.delay(900);
+    let opened: unknown;
+    await executeWiseResumeShieldedNavigationAction({
+      checkpointBefore: "before-smart-tailoring-click",
+      checkpointAfter: "after-smart-tailoring-transition",
+      assertPrivacyShield: input.assertPrivacyShield,
+      action: async () => {
+        opened = await context.evaluate(
+          `(() => { const target = document.querySelector(${JSON.stringify(workflowSelector)}); if (!target) return false; target.click(); return true; })()`,
+        );
+        if (opened !== true)
+          throw new Error("WiseResume Smart Tailoring workflow could not be opened safely.");
+      },
+      waitForTransition: async () => {
+        const settled = await context.waitUntil(
+          'document.readyState === "interactive" || document.readyState === "complete"',
+          12_000,
+        );
+        if (!settled)
+          throw new Error("WiseResume Smart Tailoring workflow did not settle after opening.");
+        await context.delay(900);
+      },
+    });
   } else throw new Error("WiseResume Smart Tailoring workflow was unavailable for the fixture.");
   assertWiseResumeFixtureMutationAllowed({
     audit: input.liveAccountSafetyAudit,
@@ -978,6 +1058,7 @@ export async function prepareWiseResumeFixtureSmartTailoring(
     targetResumeId: fixture.resumeRecordId,
     operation: "prepare fixture job posting",
   });
+  await input.assertPrivacyShield?.("before-fixture-job-posting-mutation");
   const jobPrepared = asRecord(
     await context.evaluate(`(() => { ${browserHelpers()}
       const posting = ${JSON.stringify(jobDocument(jobPosting))};
@@ -1005,8 +1086,14 @@ export async function prepareWiseResumeFixtureSmartTailoring(
     );
   if (jobPrepared.privateDataDetected === true)
     throw new Error("WiseResume fixture viewport contains sensitive data.");
-  await input.assertPrivacyShield?.("before-final-fixture-navigation");
-  await context.goto(resumeUrl, 1_000);
+  await gotoWiseResumeFixtureWithShield({
+    context,
+    url: resumeUrl,
+    waitMs: 1_000,
+    checkpointBefore: "before-final-fixture-navigation",
+    checkpointAfter: "after-final-fixture-navigation",
+    assertPrivacyShield: input.assertPrivacyShield,
+  });
   const finalVisibleSafety = await readWiseResumeFinalVisibleSafety(context, fixture);
   assertWiseResumeFinalVisibleContentSafe(finalVisibleSafety);
   return {

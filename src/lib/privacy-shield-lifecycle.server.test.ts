@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { runSingleSessionDirectedCapture } from "./single-session-director.server.ts";
+import { executeShieldedNavigationAction } from "./shielded-navigation.server.ts";
+import { resolveWiseResumeIdentity } from "./wiseresume-identity.server.ts";
 
 type MockLifecycle = {
   createdUrls: string[];
@@ -116,4 +118,49 @@ test("inconclusive authenticated identity aborts before fixture preparation", as
     runMockedLifecycle({ auditStatus: "inconclusive", repairAfterRedirect: true }),
     /inconclusive identity/,
   );
+});
+
+test("offline fixture lifecycle permits setup after independent fallback identity confirmation", async () => {
+  const identity = resolveWiseResumeIdentity({
+    expectedAccountFingerprint: "expected-fingerprint",
+    primary: { sourceAvailable: false, liveAccountFingerprint: null },
+    fallback: { sourceAvailable: true, liveAccountFingerprint: "expected-fingerprint" },
+  });
+  const shieldVisible = true;
+  let fixturePrepared = false;
+  assert.equal(identity.authenticatedAccountConfirmed, true);
+  await executeShieldedNavigationAction({
+    checkpointBefore: "before-fixture-creation-click",
+    checkpointAfter: "after-fixture-creation-transition",
+    assertPrivacyShield: async () => {
+      assert.equal(shieldVisible, true);
+    },
+    action: async () => undefined,
+    waitForTransition: async () => undefined,
+  });
+  fixturePrepared = true;
+  assert.equal(fixturePrepared, true);
+});
+
+test("offline fixture lifecycle releases without mutation when shield repair fails", async () => {
+  let shieldVisible = true;
+  let released = false;
+  const fixtureMutated = false;
+  await assert.rejects(
+    executeShieldedNavigationAction({
+      checkpointBefore: "before-fixture-creation-click",
+      checkpointAfter: "after-fixture-creation-transition",
+      assertPrivacyShield: async () => {
+        if (!shieldVisible) throw new Error("shield unavailable");
+      },
+      action: async () => {
+        shieldVisible = false;
+      },
+      waitForTransition: async () => undefined,
+    }),
+    /shield unavailable/,
+  );
+  released = true;
+  assert.equal(released, true);
+  assert.equal(fixtureMutated, false);
 });
