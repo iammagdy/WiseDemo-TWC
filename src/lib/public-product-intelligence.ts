@@ -27,12 +27,38 @@ export const publicProductIntelligenceSchema = z.object({
     slogan: nullableText,
     logoUrl: publicUrlSchema.nullable(),
     primaryLanguage: z.string().min(2).max(32).nullable(),
-    colors: z.array(z.object({ hex: z.string().regex(/^#[0-9a-fA-F]{6}$/), role: nullableText })).max(20),
+    colors: z
+      .array(z.object({ hex: z.string().regex(/^#[0-9a-fA-F]{6}$/), role: nullableText }))
+      .max(20),
   }),
-  audience: z.array(z.object({ name: z.string().min(1).max(200), problem: z.string().min(1).max(600), desiredOutcome: z.string().min(1).max(600) })).max(12),
-  valuePropositions: z.array(z.object({ claim: z.string().min(1).max(1_000), evidenceUrl: publicUrlSchema, confidence: z.number().min(0).max(1) })).max(20),
+  audience: z
+    .array(
+      z.object({
+        name: z.string().min(1).max(200),
+        problem: z.string().min(1).max(600),
+        desiredOutcome: z.string().min(1).max(600),
+      }),
+    )
+    .max(12),
+  valuePropositions: z
+    .array(
+      z.object({
+        claim: z.string().min(1).max(1_000),
+        evidenceUrl: publicUrlSchema,
+        confidence: z.number().min(0).max(1),
+      }),
+    )
+    .max(20),
   features: z.array(publicFeatureSchema).max(30),
-  useCases: z.array(z.object({ name: z.string().min(1).max(200), audience: z.string().min(1).max(300), outcome: z.string().min(1).max(600) })).max(20),
+  useCases: z
+    .array(
+      z.object({
+        name: z.string().min(1).max(200),
+        audience: z.string().min(1).max(300),
+        outcome: z.string().min(1).max(600),
+      }),
+    )
+    .max(20),
   publicCallsToAction: z.array(z.string().min(1).max(240)).max(30),
   visualIdentity: z.object({
     mode: z.enum(["light", "dark", "unknown"]),
@@ -44,8 +70,18 @@ export const publicProductIntelligenceSchema = z.object({
     spacing: z.record(z.union([z.number(), z.string().max(80)])).default({}),
     shadows: z.record(z.string().max(240)).default({}),
   }),
-  screenshots: z.object({ desktopUrl: publicUrlSchema.nullable(), narrowViewportUrl: publicUrlSchema.nullable() }),
-  sourceEvidence: z.array(z.object({ url: publicUrlSchema, type: z.enum(["brand", "extract", "styleguide", "screenshot", "crawl"]) })).max(80),
+  screenshots: z.object({
+    desktopUrl: publicUrlSchema.nullable(),
+    narrowViewportUrl: publicUrlSchema.nullable(),
+  }),
+  sourceEvidence: z
+    .array(
+      z.object({
+        url: publicUrlSchema,
+        type: z.enum(["brand", "extract", "styleguide", "screenshot", "crawl"]),
+      }),
+    )
+    .max(80),
   warnings: z.array(z.string().min(1).max(500)).max(30),
 });
 
@@ -60,16 +96,84 @@ export const contextExtractJsonSchema = {
     description: { type: ["string", "null"] },
     slogan: { type: ["string", "null"] },
     primaryLanguage: { type: ["string", "null"] },
-    audience: { type: "array", maxItems: 12, items: { type: "object", additionalProperties: false, required: ["name", "problem", "desiredOutcome"], properties: { name: { type: "string" }, problem: { type: "string" }, desiredOutcome: { type: "string" } } } },
-    valuePropositions: { type: "array", maxItems: 20, items: { type: "object", additionalProperties: false, required: ["claim", "evidenceUrl", "confidence"], properties: { claim: { type: "string" }, evidenceUrl: { type: "string" }, confidence: { type: "number", minimum: 0, maximum: 1 } } } },
-    features: { type: "array", maxItems: 30, items: { type: "object", additionalProperties: false, required: ["name", "description", "userBenefit", "userProblem", "publicEvidenceUrls", "visualDemoPotential", "marketingPriority", "likelyAuthenticated"], properties: { name: { type: "string" }, description: { type: "string" }, userBenefit: { type: "string" }, userProblem: { type: "string" }, publicEvidenceUrls: { type: "array", items: { type: "string" } }, visualDemoPotential: { type: "number", minimum: 0, maximum: 100 }, marketingPriority: { type: "number", minimum: 0, maximum: 100 }, likelyAuthenticated: { type: "boolean" } } } },
-    useCases: { type: "array", maxItems: 20, items: { type: "object", additionalProperties: false, required: ["name", "audience", "outcome"], properties: { name: { type: "string" }, audience: { type: "string" }, outcome: { type: "string" } } } },
+    audience: {
+      type: "array",
+      maxItems: 12,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["name", "problem", "desiredOutcome"],
+        properties: {
+          name: { type: "string" },
+          problem: { type: "string" },
+          desiredOutcome: { type: "string" },
+        },
+      },
+    },
+    valuePropositions: {
+      type: "array",
+      maxItems: 20,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["claim", "evidenceUrl", "confidence"],
+        properties: {
+          claim: { type: "string" },
+          evidenceUrl: { type: "string" },
+          confidence: { type: "number", minimum: 0, maximum: 1 },
+        },
+      },
+    },
+    features: {
+      type: "array",
+      maxItems: 30,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: [
+          "name",
+          "description",
+          "userBenefit",
+          "userProblem",
+          "publicEvidenceUrls",
+          "visualDemoPotential",
+          "marketingPriority",
+          "likelyAuthenticated",
+        ],
+        properties: {
+          name: { type: "string" },
+          description: { type: "string" },
+          userBenefit: { type: "string" },
+          userProblem: { type: "string" },
+          publicEvidenceUrls: { type: "array", items: { type: "string" } },
+          visualDemoPotential: { type: "number", minimum: 0, maximum: 100 },
+          marketingPriority: { type: "number", minimum: 0, maximum: 100 },
+          likelyAuthenticated: { type: "boolean" },
+        },
+      },
+    },
+    useCases: {
+      type: "array",
+      maxItems: 20,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["name", "audience", "outcome"],
+        properties: {
+          name: { type: "string" },
+          audience: { type: "string" },
+          outcome: { type: "string" },
+        },
+      },
+    },
     callsToAction: { type: "array", maxItems: 30, items: { type: "string" } },
   },
 } as const;
 
 function record(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
 }
 
 function text(value: unknown, max = 1_000): string | null {
@@ -104,7 +208,9 @@ function normalizedScore(value: unknown): number {
 }
 
 function safeEvidenceUrls(value: unknown, fallback: string): string[] {
-  const urls = array(value).map(url).filter((entry): entry is string => Boolean(entry));
+  const urls = array(value)
+    .map(url)
+    .filter((entry): entry is string => Boolean(entry));
   return [...new Set(urls)].slice(0, 12).length ? [...new Set(urls)].slice(0, 12) : [fallback];
 }
 
@@ -133,13 +239,18 @@ export function normalizePublicProductIntelligence(input: {
   const styleguide = record(record(input.styleguide).styleguide ?? input.styleguide);
   const colors = array(brand.colors)
     .map((entry) => record(entry))
-    .map((entry) => ({ hex: colour(entry.hex ?? entry.value), role: text(entry.type ?? entry.role, 120) }))
+    .map((entry) => ({
+      hex: colour(entry.hex ?? entry.value),
+      role: text(entry.type ?? entry.role, 120),
+    }))
     .filter((entry): entry is { hex: string; role: string | null } => Boolean(entry.hex));
   const styleColors = record(styleguide.colors);
   const styleTypography = record(styleguide.typography);
   const headingTypography = record(styleTypography.heading);
   const bodyTypography = record(styleTypography.body);
-  const evidenceUrls = array(record(input.extract).urls_analyzed).map(url).filter((entry): entry is string => Boolean(entry));
+  const evidenceUrls = array(record(input.extract).urls_analyzed)
+    .map(url)
+    .filter((entry): entry is string => Boolean(entry));
   const fallbackEvidence = evidenceUrls[0] ?? source.toString();
   const warnings = [...(input.warnings ?? [])];
 
@@ -152,7 +263,13 @@ export function normalizePublicProductIntelligence(input: {
       const problem = text(feature.userProblem, 600);
       if (!name || !description || !benefit || !problem) return null;
       return {
-        id: `public-${name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 72) || index + 1}`,
+        id: `public-${
+          name
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, "-")
+            .replace(/(^-|-$)/g, "")
+            .slice(0, 72) || index + 1
+        }`,
         name,
         description,
         userBenefit: benefit,
@@ -164,12 +281,21 @@ export function normalizePublicProductIntelligence(input: {
       };
     })
     .filter((entry): entry is PublicProductIntelligence["features"][number] => Boolean(entry));
-  const dedupedFeatures = features.filter((feature, index) => features.findIndex((candidate) => candidate.id === feature.id) === index);
-  if (!dedupedFeatures.length) warnings.push("Context extraction did not return a sufficiently supported public feature.");
+  const dedupedFeatures = features.filter(
+    (feature, index) => features.findIndex((candidate) => candidate.id === feature.id) === index,
+  );
+  if (!dedupedFeatures.length)
+    warnings.push("Context extraction did not return a sufficiently supported public feature.");
 
   const desktopUrl = url(record(input.desktopScreenshot).screenshot ?? input.desktopScreenshot);
-  const narrowViewportUrl = url(record(input.narrowScreenshot).screenshot ?? input.narrowScreenshot);
-  const allAccent = [...array(styleColors.primary), ...array(styleColors.accent), ...colors.map((entry) => entry.hex)]
+  const narrowViewportUrl = url(
+    record(input.narrowScreenshot).screenshot ?? input.narrowScreenshot,
+  );
+  const allAccent = [
+    ...array(styleColors.primary),
+    ...array(styleColors.accent),
+    ...colors.map((entry) => entry.hex),
+  ]
     .map((entry) => colour(typeof entry === "object" ? record(entry).hex : entry))
     .filter((entry): entry is string => Boolean(entry));
   const visualMode = text(styleguide.mode, 24)?.toLowerCase();
@@ -187,28 +313,87 @@ export function normalizePublicProductIntelligence(input: {
       primaryLanguage: text(brand.language ?? extracted.primaryLanguage, 32),
       colors: colors.slice(0, 20),
     },
-    audience: array(extracted.audience).map(record).map((entry) => ({ name: text(entry.name, 200), problem: text(entry.problem, 600), desiredOutcome: text(entry.desiredOutcome, 600) })).filter((entry): entry is PublicProductIntelligence["audience"][number] => Boolean(entry.name && entry.problem && entry.desiredOutcome)).slice(0, 12),
-    valuePropositions: array(extracted.valuePropositions).map(record).map((entry) => ({ claim: text(entry.claim), evidenceUrl: url(entry.evidenceUrl), confidence: typeof entry.confidence === "number" ? Math.max(0, Math.min(1, entry.confidence)) : 0 })).filter((entry): entry is PublicProductIntelligence["valuePropositions"][number] => Boolean(entry.claim && entry.evidenceUrl)).slice(0, 20),
+    audience: array(extracted.audience)
+      .map(record)
+      .map((entry) => ({
+        name: text(entry.name, 200),
+        problem: text(entry.problem, 600),
+        desiredOutcome: text(entry.desiredOutcome, 600),
+      }))
+      .filter((entry): entry is PublicProductIntelligence["audience"][number] =>
+        Boolean(entry.name && entry.problem && entry.desiredOutcome),
+      )
+      .slice(0, 12),
+    valuePropositions: array(extracted.valuePropositions)
+      .map(record)
+      .map((entry) => ({
+        claim: text(entry.claim),
+        evidenceUrl: url(entry.evidenceUrl),
+        confidence:
+          typeof entry.confidence === "number" ? Math.max(0, Math.min(1, entry.confidence)) : 0,
+      }))
+      .filter((entry): entry is PublicProductIntelligence["valuePropositions"][number] =>
+        Boolean(entry.claim && entry.evidenceUrl),
+      )
+      .slice(0, 20),
     features: dedupedFeatures.slice(0, 30),
-    useCases: array(extracted.useCases).map(record).map((entry) => ({ name: text(entry.name, 200), audience: text(entry.audience, 300), outcome: text(entry.outcome, 600) })).filter((entry): entry is PublicProductIntelligence["useCases"][number] => Boolean(entry.name && entry.audience && entry.outcome)).slice(0, 20),
-    publicCallsToAction: array(extracted.callsToAction).map((entry) => text(entry, 240)).filter((entry): entry is string => Boolean(entry)).slice(0, 30),
+    useCases: array(extracted.useCases)
+      .map(record)
+      .map((entry) => ({
+        name: text(entry.name, 200),
+        audience: text(entry.audience, 300),
+        outcome: text(entry.outcome, 600),
+      }))
+      .filter((entry): entry is PublicProductIntelligence["useCases"][number] =>
+        Boolean(entry.name && entry.audience && entry.outcome),
+      )
+      .slice(0, 20),
+    publicCallsToAction: array(extracted.callsToAction)
+      .map((entry) => text(entry, 240))
+      .filter((entry): entry is string => Boolean(entry))
+      .slice(0, 30),
     visualIdentity: {
       mode: visualMode === "light" || visualMode === "dark" ? visualMode : "unknown",
       accentColors: [...new Set(allAccent)].slice(0, 16),
-      backgroundColors: array(styleColors.background).map((entry) => colour(typeof entry === "object" ? record(entry).hex : entry)).filter((entry): entry is string => Boolean(entry)).slice(0, 16),
-      textColors: array(styleColors.text).map((entry) => colour(typeof entry === "object" ? record(entry).hex : entry)).filter((entry): entry is string => Boolean(entry)).slice(0, 16),
+      backgroundColors: array(styleColors.background)
+        .map((entry) => colour(typeof entry === "object" ? record(entry).hex : entry))
+        .filter((entry): entry is string => Boolean(entry))
+        .slice(0, 16),
+      textColors: array(styleColors.text)
+        .map((entry) => colour(typeof entry === "object" ? record(entry).hex : entry))
+        .filter((entry): entry is string => Boolean(entry))
+        .slice(0, 16),
       headingFont: text(styleTypography.headingFont ?? headingTypography.fontFamily, 200),
       bodyFont: text(styleTypography.bodyFont ?? bodyTypography.fontFamily, 200),
       spacing: compactObject(styleguide.elementSpacing ?? styleguide.spacing),
-      shadows: Object.fromEntries(Object.entries(compactObject(styleguide.shadows)).map(([key, value]) => [key, String(value)])),
+      shadows: Object.fromEntries(
+        Object.entries(compactObject(styleguide.shadows)).map(([key, value]) => [
+          key,
+          String(value),
+        ]),
+      ),
     },
     screenshots: { desktopUrl, narrowViewportUrl },
     sourceEvidence: [
       ...evidenceUrls.map((evidenceUrl) => ({ url: evidenceUrl, type: "extract" as const })),
-      ...(url(brand.website ?? `https://${source.hostname}`) ? [{ url: url(brand.website ?? `https://${source.hostname}`) as string, type: "brand" as const }] : []),
-      ...(Object.keys(styleguide).length ? [{ url: source.toString(), type: "styleguide" as const }] : []),
-      ...(desktopUrl || narrowViewportUrl ? [{ url: source.toString(), type: "screenshot" as const }] : []),
-      ...(input.crawlUrls ?? []).map(url).filter((entry): entry is string => Boolean(entry)).map((crawlUrl) => ({ url: crawlUrl, type: "crawl" as const })),
+      ...(url(brand.website ?? `https://${source.hostname}`)
+        ? [
+            {
+              url: url(brand.website ?? `https://${source.hostname}`) as string,
+              type: "brand" as const,
+            },
+          ]
+        : []),
+      ...(Object.keys(styleguide).length
+        ? [{ url: source.toString(), type: "styleguide" as const }]
+        : []),
+      ...(desktopUrl || narrowViewportUrl
+        ? [{ url: source.toString(), type: "screenshot" as const }]
+        : []),
+      ...(input.crawlUrls ?? [])
+        .map(url)
+        .filter((entry): entry is string => Boolean(entry))
+        .map((crawlUrl) => ({ url: crawlUrl, type: "crawl" as const })),
     ].slice(0, 80),
     warnings: [...new Set(warnings)].slice(0, 30),
   };

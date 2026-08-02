@@ -45,7 +45,11 @@ export async function requestStructuredGemini<T extends z.ZodTypeAny>(options: {
         model: options.model,
         system_instruction: `${untrustedProductDataInstruction}\n${options.systemInstruction}`,
         input,
-        response_format: { type: "text", mime_type: "application/json", schema: options.jsonSchema },
+        response_format: {
+          type: "text",
+          mime_type: "application/json",
+          schema: options.jsonSchema,
+        },
       } as never),
   });
   const outputText = (interaction as { output_text?: unknown }).output_text;

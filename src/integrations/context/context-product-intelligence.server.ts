@@ -30,14 +30,22 @@ function failureWarning(stage: string, result: PromiseSettledResult<unknown>): s
 }
 
 function crawlUrls(value: unknown): string[] {
-  if (!value || typeof value !== "object" || !("results" in value) || !Array.isArray(value.results)) {
+  if (
+    !value ||
+    typeof value !== "object" ||
+    !("results" in value) ||
+    !Array.isArray(value.results)
+  ) {
     return [];
   }
   return value.results
     .map((result) => {
       if (!result || typeof result !== "object" || !("metadata" in result)) return null;
       const metadata = result.metadata;
-      return metadata && typeof metadata === "object" && "finalUrl" in metadata && typeof metadata.finalUrl === "string"
+      return metadata &&
+        typeof metadata === "object" &&
+        "finalUrl" in metadata &&
+        typeof metadata.finalUrl === "string"
         ? metadata.finalUrl
         : null;
     })
@@ -91,28 +99,58 @@ export class ContextProductIntelligenceProvider implements ProductContextProvide
         provider: "context",
         stage: "brand",
         onEvent: this.options.onProviderEvent,
-        execute: () => this.options.client.brand.retrieve({ type: "by_domain", domain: source.hostname }),
+        execute: () =>
+          this.options.client.brand.retrieve({ type: "by_domain", domain: source.hostname }),
       }),
       retryProviderCall({
         provider: "context",
         stage: "styleguide",
         onEvent: this.options.onProviderEvent,
-        execute: () => this.options.client.web.extractStyleguide({ domain: source.hostname, maxAgeMs: input.forceRefresh ? 0 : 2_592_000_000 }),
+        execute: () =>
+          this.options.client.web.extractStyleguide({
+            domain: source.hostname,
+            maxAgeMs: input.forceRefresh ? 0 : 2_592_000_000,
+          }),
       }),
       retryProviderCall({
         provider: "context",
         stage: "desktop-screenshot",
         onEvent: this.options.onProviderEvent,
-        execute: () => this.options.client.web.screenshot({ directUrl: source.toString(), fullScreenshot: "false", handleCookiePopup: "true", viewport: { width: 1440, height: 900 }, waitForMs: 3_000, maxAgeMs, timeoutMS: 60_000 }),
+        execute: () =>
+          this.options.client.web.screenshot({
+            directUrl: source.toString(),
+            fullScreenshot: "false",
+            handleCookiePopup: "true",
+            viewport: { width: 1440, height: 900 },
+            waitForMs: 3_000,
+            maxAgeMs,
+            timeoutMS: 60_000,
+          }),
       }),
       retryProviderCall({
         provider: "context",
         stage: "narrow-screenshot",
         onEvent: this.options.onProviderEvent,
-        execute: () => this.options.client.web.screenshot({ directUrl: source.toString(), fullScreenshot: "false", handleCookiePopup: "true", viewport: { width: 390, height: 844 }, waitForMs: 3_000, maxAgeMs, timeoutMS: 60_000 }),
+        execute: () =>
+          this.options.client.web.screenshot({
+            directUrl: source.toString(),
+            fullScreenshot: "false",
+            handleCookiePopup: "true",
+            viewport: { width: 390, height: 844 },
+            waitForMs: 3_000,
+            maxAgeMs,
+            timeoutMS: 60_000,
+          }),
       }),
     ]);
-    const warnings = supplemental.map((result, index) => failureWarning(["Brand identity", "Styleguide", "Desktop screenshot", "Narrow screenshot"][index], result)).filter((entry): entry is string => Boolean(entry));
+    const warnings = supplemental
+      .map((result, index) =>
+        failureWarning(
+          ["Brand identity", "Styleguide", "Desktop screenshot", "Narrow screenshot"][index],
+          result,
+        ),
+      )
+      .filter((entry): entry is string => Boolean(entry));
     let normalized = normalizePublicProductIntelligence({
       sourceUrl: source.toString(),
       extract: extraction,
@@ -128,7 +166,13 @@ export class ContextProductIntelligenceProvider implements ProductContextProvide
       provider: "context",
       stage: "crawl-fallback",
       onEvent: this.options.onProviderEvent,
-      execute: () => this.options.client.web.webCrawlMd({ url: source.toString(), ...settings, useMainContentOnly: true, includeImages: true }),
+      execute: () =>
+        this.options.client.web.webCrawlMd({
+          url: source.toString(),
+          ...settings,
+          useMainContentOnly: true,
+          includeImages: true,
+        }),
     });
     normalized = normalizePublicProductIntelligence({
       sourceUrl: source.toString(),
@@ -138,7 +182,10 @@ export class ContextProductIntelligenceProvider implements ProductContextProvide
       desktopScreenshot: supplemental[2].status === "fulfilled" ? supplemental[2].value : undefined,
       narrowScreenshot: supplemental[3].status === "fulfilled" ? supplemental[3].value : undefined,
       crawlUrls: crawlUrls(crawl),
-      warnings: [...warnings, "Public extraction was incomplete; a single crawl fallback supplied source evidence only."],
+      warnings: [
+        ...warnings,
+        "Public extraction was incomplete; a single crawl fallback supplied source evidence only.",
+      ],
     });
     return normalized;
   }

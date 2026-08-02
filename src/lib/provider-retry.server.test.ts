@@ -9,7 +9,9 @@ test("provider retries honor Retry-After without recording payloads", async () =
   const result = await retryProviderCall({
     provider: "context",
     stage: "public-extract",
-    sleep: async (milliseconds) => { delays.push(milliseconds); },
+    sleep: async (milliseconds) => {
+      delays.push(milliseconds);
+    },
     execute: async () => {
       attempts += 1;
       if (attempts === 1) throw { status: 429, headers: { "retry-after": "2" } };
@@ -23,6 +25,15 @@ test("provider retries honor Retry-After without recording payloads", async () =
 
 test("provider does not retry invalid authentication", async () => {
   let attempts = 0;
-  await assert.rejects(() => retryProviderCall({ provider: "gemini", stage: "planning", execute: async () => { attempts += 1; throw { status: 401 }; } }));
+  await assert.rejects(() =>
+    retryProviderCall({
+      provider: "gemini",
+      stage: "planning",
+      execute: async () => {
+        attempts += 1;
+        throw { status: 401 };
+      },
+    }),
+  );
   assert.equal(attempts, 1);
 });

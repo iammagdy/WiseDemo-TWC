@@ -60,7 +60,9 @@ export async function retryProviderCall<T>(options: {
   onEvent?: (event: ProviderRetryEvent) => void;
 }): Promise<T> {
   const maxAttempts = options.maxAttempts ?? 3;
-  const sleep = options.sleep ?? ((milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
+  const sleep =
+    options.sleep ??
+    ((milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
   const random = options.random ?? Math.random;
   let lastError: unknown;
 
