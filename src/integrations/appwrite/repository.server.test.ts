@@ -74,6 +74,11 @@ function repositoryWithTransactionalDemo(initial = demoRow()) {
       demoEventsTableId: "demo_events",
       compositionsTableId: "compositions",
       compositionExportsTableId: "composition_exports",
+      productIntelligenceTableId: "product_intelligence",
+      storyboardsTableId: "storyboards",
+      demoScenesTableId: "demo_scenes",
+      qualityReviewsTableId: "quality_reviews",
+      directorArtifactsTableId: "director_artifacts",
     },
   });
   return { repository, rollbacks: () => rollbacks };

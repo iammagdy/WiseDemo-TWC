@@ -60,6 +60,7 @@ const baseDesign: CompositionDesign = {
     sourceCropRight: 0,
     sourceCropBottom: 0,
     sourceCropLeft: 0,
+    editorialCuts: [],
   },
   animation: {
     preset: "minimal-premium",

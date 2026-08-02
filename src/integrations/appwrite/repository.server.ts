@@ -18,17 +18,34 @@ import type {
   CompositionRecord,
   CompositionRenderStatus,
   CompositionUpdate,
+  DirectorArtifactCreate,
+  DirectorArtifactKind,
+  DirectorArtifactRecord,
   DemoCreate,
   DemoEventRecord,
   DemoRecord,
   DemoStatus,
   DemoUpdate,
+  DemoSceneRecord,
   Json,
   ProjectCreate,
   ProjectCredentialRecord,
   ProjectRecord,
   ProjectUpdate,
+  ProductIntelligenceRecord,
+  QualityReviewRecord,
+  StoryboardRecord,
 } from "./types.ts";
+import {
+  parseDemoSceneCapture,
+  parseDemoStoryboard,
+  parseProductIntelligence,
+  parseVideoQualityReview,
+  type DemoSceneCapture,
+  type DemoStoryboard,
+  type ProductIntelligence,
+  type VideoQualityReview,
+} from "../../lib/product-intelligence.ts";
 
 export const SHARED_WORKSPACE_ID = "shared-public-workspace";
 
@@ -65,6 +82,9 @@ type DemoRow = Models.Row & {
   scene_script?: string | null;
   recording_locale?: "english" | "arabic" | "auto" | null;
   source_viewport_json?: string | null;
+  product_intelligence_id?: string | null;
+  feature_candidate_id?: string | null;
+  storyboard_id?: string | null;
   status: DemoStatus;
   progress_pct: number;
   current_step?: string | null;
@@ -122,6 +142,56 @@ type CompositionExportRow = Models.Row & {
   output_duration?: number | null;
 };
 
+type ProductIntelligenceRow = Models.Row & {
+  workspace_id: string;
+  project_id: string;
+  version: number;
+  intelligence_json: string;
+  global_confidence: number;
+};
+type StoryboardRow = Models.Row & {
+  workspace_id: string;
+  project_id: string;
+  demo_id: string;
+  feature_candidate_id: string;
+  version: number;
+  storyboard_json: string;
+};
+type DemoSceneRow = Models.Row & {
+  workspace_id: string;
+  project_id: string;
+  demo_id: string;
+  storyboard_id: string;
+  scene_key: string;
+  sequence: number;
+  capture_json: string;
+};
+type QualityReviewRow = Models.Row & {
+  workspace_id: string;
+  project_id: string;
+  demo_id: string;
+  composition_export_id?: string | null;
+  review_json: string;
+  score: number;
+  status: "pass" | "pass-with-warnings" | "fail";
+  revision: number;
+};
+type DirectorArtifactRow = Models.Row & {
+  workspace_id: string;
+  project_id: string;
+  demo_id?: string | null;
+  artifact_kind: DirectorArtifactKind;
+  cache_key: string;
+  status: "ready" | "unavailable" | "failed";
+  payload_json: string;
+  expires_at?: string | null;
+  provider?: string | null;
+  model?: string | null;
+  duration_ms?: number | null;
+  revision: number;
+  failure_reason?: string | null;
+};
+
 export type WiseDemoRepositoryServices = {
   tables: TablesDB;
   config: Pick<
@@ -133,6 +203,11 @@ export type WiseDemoRepositoryServices = {
     | "demoEventsTableId"
     | "compositionsTableId"
     | "compositionExportsTableId"
+    | "productIntelligenceTableId"
+    | "storyboardsTableId"
+    | "demoScenesTableId"
+    | "qualityReviewsTableId"
+    | "directorArtifactsTableId"
   >;
 };
 
@@ -199,6 +274,9 @@ function demoFromRow(row: DemoRow): DemoRecord {
     scene_script: parseJson(row.scene_script),
     recording_locale: row.recording_locale ?? "english",
     source_viewport: sourceViewport,
+    product_intelligence_id: row.product_intelligence_id ?? null,
+    feature_candidate_id: row.feature_candidate_id ?? null,
+    storyboard_id: row.storyboard_id ?? null,
     status: row.status,
     progress_pct: row.progress_pct,
     current_step: row.current_step ?? null,
@@ -219,6 +297,80 @@ function demoFromRow(row: DemoRow): DemoRecord {
     execution_started_at: row.execution_started_at ?? null,
     finalization_attempts: row.finalization_attempts,
     finalization_started_at: row.finalization_started_at ?? null,
+    created_at: row.$createdAt,
+    updated_at: row.$updatedAt,
+  };
+}
+
+function intelligenceFromRow(row: ProductIntelligenceRow): ProductIntelligenceRecord {
+  return {
+    id: row.$id,
+    project_id: row.project_id,
+    version: row.version,
+    intelligence_json: parseProductIntelligence(JSON.parse(row.intelligence_json)),
+    global_confidence: row.global_confidence,
+    created_at: row.$createdAt,
+  };
+}
+
+function storyboardFromRow(row: StoryboardRow): StoryboardRecord {
+  return {
+    id: row.$id,
+    project_id: row.project_id,
+    demo_id: row.demo_id,
+    feature_candidate_id: row.feature_candidate_id,
+    version: row.version,
+    storyboard_json: parseDemoStoryboard(JSON.parse(row.storyboard_json)),
+    created_at: row.$createdAt,
+    updated_at: row.$updatedAt,
+  };
+}
+
+function demoSceneFromRow(row: DemoSceneRow): DemoSceneRecord {
+  return {
+    id: row.$id,
+    project_id: row.project_id,
+    demo_id: row.demo_id,
+    storyboard_id: row.storyboard_id,
+    scene_key: row.scene_key,
+    sequence: row.sequence,
+    capture_json: parseDemoSceneCapture(JSON.parse(row.capture_json)),
+    created_at: row.$createdAt,
+    updated_at: row.$updatedAt,
+  };
+}
+
+function qualityReviewFromRow(row: QualityReviewRow): QualityReviewRecord {
+  return {
+    id: row.$id,
+    project_id: row.project_id,
+    demo_id: row.demo_id,
+    composition_export_id: row.composition_export_id ?? null,
+    review_json: parseVideoQualityReview(JSON.parse(row.review_json)),
+    score: row.score,
+    status: row.status,
+    revision: row.revision,
+    created_at: row.$createdAt,
+  };
+}
+
+function directorArtifactFromRow(row: DirectorArtifactRow): DirectorArtifactRecord {
+  const payload = parseJson(row.payload_json);
+  if (payload === null) throw new Error("Stored director artifact is missing JSON data.");
+  return {
+    id: row.$id,
+    project_id: row.project_id,
+    demo_id: row.demo_id ?? null,
+    artifact_kind: row.artifact_kind,
+    cache_key: row.cache_key,
+    status: row.status,
+    payload_json: payload,
+    expires_at: row.expires_at ?? null,
+    provider: row.provider ?? null,
+    model: row.model ?? null,
+    duration_ms: row.duration_ms ?? null,
+    revision: row.revision,
+    failure_reason: row.failure_reason ?? null,
     created_at: row.$createdAt,
     updated_at: row.$updatedAt,
   };
@@ -363,6 +515,247 @@ export class WiseDemoRepository {
       projectId,
     );
     return row ? credentialFromRow(row) : null;
+  }
+
+  async createProductIntelligence(input: {
+    project_id: string;
+    intelligence: ProductIntelligence;
+    version: number;
+  }): Promise<ProductIntelligenceRecord> {
+    const row = await this.#createRowIdempotently<ProductIntelligenceRow>(
+      this.#config.productIntelligenceTableId,
+      crypto.randomUUID(),
+      {
+        workspace_id: this.#workspaceId,
+        project_id: input.project_id,
+        version: input.version,
+        intelligence_json: JSON.stringify(input.intelligence),
+        global_confidence: input.intelligence.globalConfidence,
+      },
+    );
+    return intelligenceFromRow(row);
+  }
+
+  async getLatestProductIntelligence(projectId: string): Promise<ProductIntelligenceRecord | null> {
+    try {
+      const result = await this.#tables.listRows<ProductIntelligenceRow>({
+        databaseId: this.#config.databaseId,
+        tableId: this.#config.productIntelligenceTableId,
+        queries: [
+          Query.equal("workspace_id", this.#workspaceId),
+          Query.equal("project_id", projectId),
+          Query.orderDesc("$createdAt"),
+          Query.limit(1),
+        ],
+        ttl: 0,
+      });
+      return result.rows[0] ? intelligenceFromRow(result.rows[0]) : null;
+    } catch (error) {
+      throw safeAppwriteError(error);
+    }
+  }
+
+  async createStoryboard(input: {
+    project_id: string;
+    demo_id: string;
+    feature_candidate_id: string;
+    storyboard: DemoStoryboard;
+  }): Promise<StoryboardRecord> {
+    const row = await this.#createRowIdempotently<StoryboardRow>(
+      this.#config.storyboardsTableId,
+      crypto.randomUUID(),
+      {
+        workspace_id: this.#workspaceId,
+        project_id: input.project_id,
+        demo_id: input.demo_id,
+        feature_candidate_id: input.feature_candidate_id,
+        version: input.storyboard.revision,
+        storyboard_json: JSON.stringify(input.storyboard),
+      },
+    );
+    return storyboardFromRow(row);
+  }
+
+  async getStoryboard(storyboardId: string): Promise<StoryboardRecord | null> {
+    const row = await this.#getWorkspaceRow<StoryboardRow>(
+      this.#config.storyboardsTableId,
+      storyboardId,
+    );
+    return row ? storyboardFromRow(row) : null;
+  }
+
+  async listStoryboards(demoId: string): Promise<StoryboardRecord[]> {
+    try {
+      const result = await this.#tables.listRows<StoryboardRow>({
+        databaseId: this.#config.databaseId,
+        tableId: this.#config.storyboardsTableId,
+        queries: [
+          Query.equal("workspace_id", this.#workspaceId),
+          Query.equal("demo_id", demoId),
+          Query.orderDesc("$createdAt"),
+          Query.limit(20),
+        ],
+        ttl: 0,
+      });
+      return result.rows.map(storyboardFromRow);
+    } catch (error) {
+      throw safeAppwriteError(error);
+    }
+  }
+
+  async upsertDemoScene(input: {
+    project_id: string;
+    demo_id: string;
+    storyboard_id: string;
+    scene_key: string;
+    sequence: number;
+    capture: DemoSceneCapture;
+  }): Promise<DemoSceneRecord> {
+    const row = await this.#tables.upsertRow<DemoSceneRow>({
+      databaseId: this.#config.databaseId,
+      tableId: this.#config.demoScenesTableId,
+      rowId: input.scene_key,
+      data: {
+        workspace_id: this.#workspaceId,
+        project_id: input.project_id,
+        demo_id: input.demo_id,
+        storyboard_id: input.storyboard_id,
+        scene_key: input.scene_key,
+        sequence: input.sequence,
+        capture_json: JSON.stringify(input.capture),
+      },
+      permissions: [],
+    });
+    return demoSceneFromRow(row);
+  }
+
+  async listDemoScenes(demoId: string): Promise<DemoSceneRecord[]> {
+    try {
+      const result = await this.#tables.listRows<DemoSceneRow>({
+        databaseId: this.#config.databaseId,
+        tableId: this.#config.demoScenesTableId,
+        queries: [
+          Query.equal("workspace_id", this.#workspaceId),
+          Query.equal("demo_id", demoId),
+          Query.orderAsc("sequence"),
+          Query.limit(100),
+        ],
+        ttl: 0,
+      });
+      return result.rows.map(demoSceneFromRow);
+    } catch (error) {
+      throw safeAppwriteError(error);
+    }
+  }
+
+  async createQualityReview(input: {
+    project_id: string;
+    demo_id: string;
+    composition_export_id?: string | null;
+    review: VideoQualityReview;
+    revision: number;
+  }): Promise<QualityReviewRecord> {
+    const row = await this.#createRowIdempotently<QualityReviewRow>(
+      this.#config.qualityReviewsTableId,
+      crypto.randomUUID(),
+      {
+        workspace_id: this.#workspaceId,
+        project_id: input.project_id,
+        demo_id: input.demo_id,
+        composition_export_id: input.composition_export_id ?? null,
+        review_json: JSON.stringify(input.review),
+        score: input.review.score,
+        status: input.review.status,
+        revision: input.revision,
+      },
+    );
+    return qualityReviewFromRow(row);
+  }
+
+  async listQualityReviews(demoId: string): Promise<QualityReviewRecord[]> {
+    try {
+      const result = await this.#tables.listRows<QualityReviewRow>({
+        databaseId: this.#config.databaseId,
+        tableId: this.#config.qualityReviewsTableId,
+        queries: [
+          Query.equal("workspace_id", this.#workspaceId),
+          Query.equal("demo_id", demoId),
+          Query.orderDesc("$createdAt"),
+          Query.limit(20),
+        ],
+        ttl: 0,
+      });
+      return result.rows.map(qualityReviewFromRow);
+    } catch (error) {
+      throw safeAppwriteError(error);
+    }
+  }
+
+  async createDirectorArtifact(input: DirectorArtifactCreate): Promise<DirectorArtifactRecord> {
+    const row = await this.#createRowIdempotently<DirectorArtifactRow>(
+      this.#config.directorArtifactsTableId,
+      crypto.randomUUID(),
+      {
+        workspace_id: this.#workspaceId,
+        ...input,
+        payload_json: JSON.stringify(input.payload_json),
+      },
+    );
+    return directorArtifactFromRow(row);
+  }
+
+  async getCachedDirectorArtifact(input: {
+    projectId: string;
+    artifactKind: DirectorArtifactKind;
+    cacheKey: string;
+    now?: Date;
+  }): Promise<DirectorArtifactRecord | null> {
+    try {
+      const result = await this.#tables.listRows<DirectorArtifactRow>({
+        databaseId: this.#config.databaseId,
+        tableId: this.#config.directorArtifactsTableId,
+        queries: [
+          Query.equal("workspace_id", this.#workspaceId),
+          Query.equal("project_id", input.projectId),
+          Query.equal("artifact_kind", input.artifactKind),
+          Query.equal("cache_key", input.cacheKey),
+          Query.orderDesc("$createdAt"),
+          Query.limit(10),
+        ],
+        ttl: 0,
+      });
+      const now = (input.now ?? new Date()).getTime();
+      const fresh = result.rows
+        .map(directorArtifactFromRow)
+        .find(
+          (artifact) =>
+            artifact.status === "ready" &&
+            artifact.expires_at &&
+            Date.parse(artifact.expires_at) > now,
+        );
+      return fresh ?? null;
+    } catch (error) {
+      throw safeAppwriteError(error);
+    }
+  }
+
+  async listDirectorArtifacts(projectId: string): Promise<DirectorArtifactRecord[]> {
+    try {
+      const result = await this.#tables.listRows<DirectorArtifactRow>({
+        databaseId: this.#config.databaseId,
+        tableId: this.#config.directorArtifactsTableId,
+        queries: [
+          Query.equal("workspace_id", this.#workspaceId),
+          Query.equal("project_id", projectId),
+          Query.orderDesc("$createdAt"),
+          Query.limit(100),
+        ],
+        ttl: 0,
+      });
+      return result.rows.map(directorArtifactFromRow);
+    } catch (error) {
+      throw safeAppwriteError(error);
+    }
   }
 
   async upsertCredential(input: {

@@ -19,20 +19,58 @@ import {
 } from "./steel-recorder.server";
 import { isVerifiedLoginOutcome } from "./demo-state";
 import { isSafeReconNavigation } from "./recon-safety";
+import { isSafeReconAction } from "./recon-safety";
+import {
+  applyWiseResumeProfileLocale,
+  openWiseResumeLanguageSettings,
+  type ProductLocaleAdapterContext,
+} from "./product-adapters/wiseresume.server";
+import {
+  detectSensitiveContent,
+  scoreMeaningfulStateChange,
+  summarizeDomState,
+  type DiscoveredAction,
+} from "./product-intelligence";
 
 export type PageOutline = {
   url: string;
   title: string;
   headings: string[];
   navLinks: { text: string; href: string }[];
-  clickables: { text: string; selector: string }[];
+  clickables: {
+    text: string;
+    selector: string;
+    bounds?: { x: number; y: number; width: number; height: number };
+  }[];
   inputs: { label: string; selector: string }[];
+  visibleText: string;
+};
+
+export type ReconObservation = {
+  stateId: string;
+  screenshotId: string;
+  screenshotBase64: string | null;
+  screenshotFingerprint: string | null;
+  timestamp: number;
+  sensitive: boolean;
+  outline: PageOutline;
+};
+export type ReconActionProbe = {
+  action: DiscoveredAction;
+  status: "successful" | "failed" | "unsafe" | "no-change";
+  meaningful: boolean;
+  before: ReconObservation;
+  after: ReconObservation;
+  requiredPreparation: string[];
+  timestamp: number;
 };
 
 export type ReconResult = {
   loggedIn: boolean;
   pages: PageOutline[];
   notes: string[];
+  observations: ReconObservation[];
+  actionProbes: ReconActionProbe[];
 };
 
 export type AuthenticatedSiteResult = {
@@ -69,12 +107,12 @@ const EXTRACT_EXPRESSION = `(() => {
   };
   const headings = Array.from(document.querySelectorAll("h1, h2, h3")).filter(visible).map(text).filter(Boolean).slice(0, 14);
   const navLinks = Array.from(document.querySelectorAll("a[href]")).filter(visible).map((a) => ({ text: text(a), href: a.href })).filter((l) => l.text && l.href.startsWith("http")).slice(0, 25);
-  const clickables = Array.from(document.querySelectorAll("button, a[href], [role=button], [role=tab], [role=menuitem]")).filter(visible).map((el) => ({ text: text(el), selector: cssPath(el) })).filter((c) => c.text).slice(0, 25);
+  const clickables = Array.from(document.querySelectorAll("button, a[href], [role=button], [role=tab], [role=menuitem]")).filter(visible).map((el) => { const r = el.getBoundingClientRect(); return ({ text: text(el), selector: cssPath(el), bounds: { x: Math.max(0, r.x), y: Math.max(0, r.y), width: r.width, height: r.height } }); }).filter((c) => c.text).slice(0, 25);
   const inputs = Array.from(document.querySelectorAll("input, textarea, select")).filter(visible).map((el) => ({
     label: (el.getAttribute("placeholder") || el.getAttribute("aria-label") || el.getAttribute("name") || el.type || "field"),
     selector: cssPath(el),
   })).slice(0, 15);
-  return JSON.stringify({ url: location.href, title: document.title, headings, navLinks, clickables, inputs });
+  return JSON.stringify({ url: location.href, title: document.title, headings, navLinks, clickables, inputs, visibleText: text(document.body).slice(0, 2400) });
 })()`;
 
 type Cdp = { socket: WebSocket; sid: string; nextId: () => number };
@@ -151,6 +189,163 @@ async function outline(cdp: Cdp): Promise<PageOutline | null> {
     return JSON.parse(raw) as PageOutline;
   } catch {
     return null;
+  }
+}
+
+async function captureScreenshot(cdp: Cdp): Promise<string | null> {
+  try {
+    const result = (await cdpCall(
+      cdp.socket,
+      cdp.nextId(),
+      "Page.captureScreenshot",
+      { format: "jpeg", quality: 72, captureBeyondViewport: false },
+      cdp.sid,
+    )) as { data?: string };
+    return typeof result.data === "string" && result.data.length > 400 ? result.data : null;
+  } catch {
+    return null;
+  }
+}
+
+async function captureObservation(cdp: Cdp): Promise<ReconObservation | null> {
+  const current = await outline(cdp);
+  if (!current) return null;
+  const timestamp = Date.now();
+  const sensitive = detectSensitiveContent(
+    `${current.visibleText} ${current.inputs.map((entry) => entry.label).join(" ")}`,
+  );
+  const screenshotBase64 = sensitive ? null : await captureScreenshot(cdp);
+  return {
+    stateId: crypto.randomUUID(),
+    screenshotId: crypto.randomUUID(),
+    screenshotBase64,
+    screenshotFingerprint: screenshotBase64?.slice(0, 1200) ?? null,
+    timestamp,
+    sensitive,
+    outline: current,
+  };
+}
+
+async function probeAction(
+  cdp: Cdp,
+  before: ReconObservation,
+  clickable: PageOutline["clickables"][number],
+): Promise<ReconActionProbe> {
+  const requiredPreparation = before.sensitive
+    ? ["Use a sanitized demo account before capture."]
+    : [];
+  const actionBase = {
+    id: crypto.randomUUID(),
+    type: "click" as const,
+    label: clickable.text,
+    selector: clickable.selector,
+    requiredState: before.outline.title || "Product page",
+    visualChangeScore: 0,
+    semanticChangeScore: 0,
+    reliabilityScore: 0,
+    zoomTarget: clickable.bounds,
+    evidence: [] as DiscoveredAction["evidence"],
+  };
+  if (!isSafeReconAction(clickable.text, clickable.selector)) {
+    return {
+      action: { ...actionBase, status: "unsafe" },
+      status: "unsafe",
+      meaningful: false,
+      before,
+      after: before,
+      requiredPreparation,
+      timestamp: Date.now(),
+    };
+  }
+  try {
+    const clicked = await evaluate(
+      cdp,
+      `(() => { const el = document.querySelector(${JSON.stringify(clickable.selector)}); if (!el) return false; const r = el.getBoundingClientRect(); if (r.width < 4 || r.height < 4) return false; el.scrollIntoView({ block: "center" }); el.click(); return true; })()`,
+    );
+    if (clicked !== true) throw new Error("The discovered element was no longer actionable.");
+    await delay(900);
+    await waitUntil(
+      cdp,
+      'document.readyState === "interactive" || document.readyState === "complete"',
+      8_000,
+    );
+    const after = (await captureObservation(cdp)) ?? before;
+    const change = scoreMeaningfulStateChange(
+      {
+        url: before.outline.url,
+        title: before.outline.title,
+        summary: summarizeDomState({
+          url: before.outline.url,
+          title: before.outline.title,
+          headings: before.outline.headings,
+          buttonLabels: before.outline.clickables.map((entry) => entry.text),
+          visibleText: before.outline.visibleText,
+        }),
+        screenshotFingerprint: before.screenshotFingerprint,
+      },
+      {
+        url: after.outline.url,
+        title: after.outline.title,
+        summary: summarizeDomState({
+          url: after.outline.url,
+          title: after.outline.title,
+          headings: after.outline.headings,
+          buttonLabels: after.outline.clickables.map((entry) => entry.text),
+          visibleText: after.outline.visibleText,
+        }),
+        screenshotFingerprint: after.screenshotFingerprint,
+      },
+    );
+    const status = change.meaningful ? "successful" : "no-change";
+    return {
+      action: {
+        ...actionBase,
+        status,
+        visualChangeScore: change.visualChangeScore,
+        semanticChangeScore: change.semanticChangeScore,
+        reliabilityScore: 0.82,
+        beforeStateId: before.stateId,
+        afterStateId: after.stateId,
+        expectedResult: after.outline.headings[0] || after.outline.title,
+        evidence: [
+          { type: "successful-action", value: clickable.selector, timestamp: Date.now() },
+          {
+            type: "state-diff",
+            value: `visual=${change.visualChangeScore};semantic=${change.semanticChangeScore}`,
+            timestamp: Date.now(),
+          },
+        ],
+      },
+      status,
+      meaningful: change.meaningful,
+      before,
+      after,
+      requiredPreparation,
+      timestamp: Date.now(),
+    };
+  } catch (error) {
+    return {
+      action: {
+        ...actionBase,
+        status: "failed",
+        reliabilityScore: 0,
+        evidence: [
+          {
+            type: "text",
+            value: error instanceof Error ? error.message.slice(0, 400) : "Action probe failed",
+            timestamp: Date.now(),
+          },
+        ],
+      },
+      status: "failed",
+      meaningful: false,
+      before,
+      after: before,
+      requiredPreparation,
+      timestamp: Date.now(),
+    };
+  } finally {
+    if (before.outline.url) await goto(cdp, before.outline.url, 700).catch(() => undefined);
   }
 }
 
@@ -337,89 +532,13 @@ async function applyLocalePersistenceHints(
   return true;
 }
 
-async function openWiseResumeLanguageSettings(cdp: Cdp): Promise<boolean> {
-  const host = await evaluate(cdp, "location.hostname");
-  if (typeof host !== "string" || !/(^|\.)wiseresume\.app$/i.test(host)) return false;
-  // WiseResume persists `wiseresume-locale` locally and synchronizes the same
-  // value to its authenticated user_preferences profile. Use the real Settings
-  // select so both stores change through the application's own code path.
-  const clicked = await evaluate(
-    cdp,
-    `(() => {
-      const visible = (element) => { const rect = element.getBoundingClientRect(); return rect.width > 4 && rect.height > 4; };
-      const label = (element) => String(element.innerText || element.textContent || element.getAttribute("aria-label") || "").replace(/\\s+/g, " ").trim();
-      const settings = Array.from(document.querySelectorAll("a[href], button, [role=button], [role=menuitem]"))
-        .find((element) => visible(element) && (/settings|الإعدادات/i.test(label(element)) || /settings/i.test(element.getAttribute("href") || "")));
-      if (!settings) return false;
-      settings.click();
-      return true;
-    })()`,
-  );
-  if (clicked === true) await delay(900);
-  const selectorReady = await waitUntil(
-    cdp,
-    `Array.from(document.querySelectorAll("select")).some((select) => Array.from(select.options).some((option) => /english|^en([-_]|$)/i.test(option.text + " " + option.value)))`,
-    12_000,
-  );
-  if (selectorReady) return true;
-
-  const origin = await evaluate(cdp, "location.origin");
-  if (typeof origin !== "string") return false;
-  await goto(cdp, new URL("/settings", origin).toString(), 1_500);
-  return waitUntil(
-    cdp,
-    `Array.from(document.querySelectorAll("select")).some((select) => Array.from(select.options).some((option) => /english|^en([-_]|$)/i.test(option.text + " " + option.value)))`,
-    15_000,
-  );
-}
-
-async function applyWiseResumeProfileLocale(
-  cdp: Cdp,
-  locale: Exclude<RecordingLocale, "auto">,
-): Promise<boolean> {
-  const host = await evaluate(cdp, "location.hostname");
-  if (typeof host !== "string" || !/(^|\.)wiseresume\.app$/i.test(host)) return false;
-  const language = locale === "english" ? "en" : "ar";
-  // Verified against WiseResume's public production bundle. This fallback uses
-  // the already-authenticated browser session and the application's own
-  // user_preferences document when its feature-gated Settings selector is not
-  // rendered. No account identifiers or response data leave the page.
-  const updated = await evaluate(
-    cdp,
-    `(async () => {
-      const endpoint = "https://fra.cloud.appwrite.io/v1";
-      const project = "69fd362b001eb325a192";
-      const headers = { "X-Appwrite-Project": project, "Content-Type": "application/json" };
-      const accountResponse = await fetch(endpoint + "/account", { credentials: "include", headers });
-      if (!accountResponse.ok) return false;
-      const account = await accountResponse.json();
-      if (!account || typeof account.$id !== "string") return false;
-      const query = encodeURIComponent(JSON.stringify({ method: "equal", attribute: "user_id", values: [account.$id] }));
-      const listResponse = await fetch(endpoint + "/databases/main/collections/user_preferences/documents?queries[]=" + query, { credentials: "include", headers });
-      if (!listResponse.ok) return false;
-      const list = await listResponse.json();
-      const documentId = list?.documents?.[0]?.$id;
-      if (typeof documentId !== "string") return false;
-      const updateResponse = await fetch(endpoint + "/databases/main/collections/user_preferences/documents/" + encodeURIComponent(documentId), {
-        method: "PATCH",
-        credentials: "include",
-        headers,
-        body: JSON.stringify({ data: { language: ${JSON.stringify(language)} } }),
-      });
-      if (!updateResponse.ok) return false;
-      localStorage.setItem("wiseresume-locale", ${JSON.stringify(language)});
-      location.reload();
-      return true;
-    })()`,
-  );
-  if (updated !== true) return false;
-  await delay(1_500);
-  await waitUntil(
-    cdp,
-    'document.readyState === "interactive" || document.readyState === "complete"',
-    12_000,
-  );
-  return true;
+function productLocaleAdapterContext(cdp: Cdp): ProductLocaleAdapterContext {
+  return {
+    evaluate: (expression) => evaluate(cdp, expression),
+    delay,
+    waitUntil: (expression, timeoutMs) => waitUntil(cdp, expression, timeoutMs),
+    goto: (url, settleMs) => goto(cdp, url, settleMs),
+  };
 }
 
 async function ensureApplicationLocale(
@@ -434,13 +553,14 @@ async function ensureApplicationLocale(
   state = await waitForVerifiedApplicationLocale(cdp, locale);
   if (verifyApplicationLocale(state, locale).verified) return state;
 
-  if (await openWiseResumeLanguageSettings(cdp)) {
+  const adapterContext = productLocaleAdapterContext(cdp);
+  if (await openWiseResumeLanguageSettings(adapterContext)) {
     await selectVisibleApplicationLanguage(cdp, locale);
     state = await waitForVerifiedApplicationLocale(cdp, locale, 12_000);
     if (verifyApplicationLocale(state, locale).verified) return state;
   }
 
-  if (await applyWiseResumeProfileLocale(cdp, locale)) {
+  if (await applyWiseResumeProfileLocale(adapterContext, locale)) {
     state = await waitForVerifiedApplicationLocale(cdp, locale, 12_000);
     if (verifyApplicationLocale(state, locale).verified) return state;
   }
@@ -574,23 +694,29 @@ export async function reconSite(input: {
   const maxPages = input.maxPages ?? 4;
   const notes: string[] = [];
   const pages: PageOutline[] = [];
+  const observations: ReconObservation[] = [];
+  const actionProbes: ReconActionProbe[] = [];
   let loggedIn = false;
 
   const recordingLocale = input.recordingLocale ?? DEFAULT_RECORDING_LOCALE;
   const cdp = await attach(websocketUrl, recordingLocale);
   try {
     await goto(cdp, baseUrl, 3500);
-    const landing = await outline(cdp);
-    if (landing) pages.push(landing);
+    const landing = await captureObservation(cdp);
+    if (landing) {
+      pages.push(landing.outline);
+      observations.push(landing);
+    }
 
     if (credentials) {
       const target = loginUrl ?? credentials.loginUrl ?? baseUrl;
       await signIn(cdp, target, credentials);
       const localeState = await ensureApplicationLocale(cdp, recordingLocale);
-      const authenticatedOutline = await outline(cdp);
-      if (!authenticatedOutline)
+      const authenticatedObservation = await captureObservation(cdp);
+      if (!authenticatedObservation)
         throw new Error("Could not inspect the authenticated application.");
-      pages.push(authenticatedOutline);
+      pages.push(authenticatedObservation.outline);
+      observations.push(authenticatedObservation);
       loggedIn = true;
       notes.push(
         `Signed in with the stored credentials; ${recordingLocale} UI verified (${localePersistenceSources(localeState).join(", ") || "application selector"}).`,
@@ -606,10 +732,20 @@ export async function reconSite(input: {
 
     for (const href of candidates) {
       await goto(cdp, href, 3000);
-      const page = await outline(cdp);
-      if (page && !seen.has(page.url)) {
-        pages.push(page);
-        seen.add(page.url);
+      const observation = await captureObservation(cdp);
+      if (observation && !seen.has(observation.outline.url)) {
+        pages.push(observation.outline);
+        observations.push(observation);
+        seen.add(observation.outline.url);
+      }
+    }
+    for (const observation of observations.filter((entry) => !entry.sensitive)) {
+      if (actionProbes.length >= 5) break;
+      await goto(cdp, observation.outline.url, 800);
+      for (const clickable of observation.outline.clickables) {
+        if (actionProbes.length >= 5) break;
+        const probe = await probeAction(cdp, observation, clickable);
+        actionProbes.push(probe);
       }
     }
   } catch (err) {
@@ -626,7 +762,7 @@ export async function reconSite(input: {
     }
   }
 
-  return { loggedIn, pages, notes };
+  return { loggedIn, pages, notes, observations, actionProbes };
 }
 
 export function outlineToMarkdown(name: string, baseUrl: string, recon: ReconResult): string {

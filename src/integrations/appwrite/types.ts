@@ -1,6 +1,12 @@
 import type { CompositionDesign } from "@/composition/model";
 import type { SourceViewportMetadata } from "@/composition/source-viewport";
 import type { RecordingLocale } from "@/lib/recording-locale";
+import type {
+  DemoSceneCapture,
+  DemoStoryboard,
+  ProductIntelligence,
+  VideoQualityReview,
+} from "../../lib/product-intelligence.ts";
 
 export type Json = string | number | boolean | null | { [key: string]: Json | undefined } | Json[];
 
@@ -37,6 +43,9 @@ export type DemoRecord = {
   scene_script: Json | null;
   recording_locale: RecordingLocale;
   source_viewport: SourceViewportMetadata | null;
+  product_intelligence_id: string | null;
+  feature_candidate_id: string | null;
+  storyboard_id: string | null;
   status: DemoStatus;
   progress_pct: number;
   current_step: string | null;
@@ -103,6 +112,77 @@ export type CompositionExportRecord = {
   updated_at: string;
 };
 
+export type ProductIntelligenceRecord = {
+  id: string;
+  project_id: string;
+  version: number;
+  intelligence_json: ProductIntelligence;
+  global_confidence: number;
+  created_at: string;
+};
+
+export type StoryboardRecord = {
+  id: string;
+  project_id: string;
+  demo_id: string;
+  feature_candidate_id: string;
+  version: number;
+  storyboard_json: DemoStoryboard;
+  created_at: string;
+  updated_at: string;
+};
+
+export type DemoSceneRecord = {
+  id: string;
+  project_id: string;
+  demo_id: string;
+  storyboard_id: string;
+  scene_key: string;
+  sequence: number;
+  capture_json: DemoSceneCapture;
+  created_at: string;
+  updated_at: string;
+};
+
+export type QualityReviewRecord = {
+  id: string;
+  project_id: string;
+  demo_id: string;
+  composition_export_id: string | null;
+  review_json: VideoQualityReview;
+  score: number;
+  status: VideoQualityReview["status"];
+  revision: number;
+  created_at: string;
+};
+
+export type DirectorArtifactKind =
+  | "public-intelligence"
+  | "brand-style"
+  | "creative-brief"
+  | "capture-plan"
+  | "capture-telemetry"
+  | "deterministic-qa"
+  | "gemini-review";
+
+export type DirectorArtifactRecord = {
+  id: string;
+  project_id: string;
+  demo_id: string | null;
+  artifact_kind: DirectorArtifactKind;
+  cache_key: string;
+  status: "ready" | "unavailable" | "failed";
+  payload_json: Json;
+  expires_at: string | null;
+  provider: string | null;
+  model: string | null;
+  duration_ms: number | null;
+  revision: number;
+  failure_reason: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 export type ProjectCreate = Pick<ProjectRecord, "name" | "base_url"> &
   Partial<
     Pick<ProjectRecord, "description" | "site_map_md" | "site_map_source" | "site_map_updated_at">
@@ -122,6 +202,9 @@ export type DemoCreate = Pick<DemoRecord, "project_id" | "title" | "feature_prom
       | "thumbnail_url"
       | "recording_locale"
       | "source_viewport"
+      | "product_intelligence_id"
+      | "feature_candidate_id"
+      | "storyboard_id"
     >
   >;
 
@@ -133,6 +216,11 @@ export type CompositionCreate = Omit<CompositionRecord, "id" | "created_at" | "u
 
 export type CompositionUpdate = Partial<
   Pick<CompositionRecord, "composition_json" | "composition_version" | "template_id">
+>;
+
+export type DirectorArtifactCreate = Omit<
+  DirectorArtifactRecord,
+  "id" | "created_at" | "updated_at"
 >;
 
 export type CompositionExportCreate = Omit<

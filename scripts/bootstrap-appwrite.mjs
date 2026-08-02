@@ -20,7 +20,16 @@ const config = {
   compositionsTableId: process.env.APPWRITE_COMPOSITIONS_COLLECTION_ID?.trim() || "compositions",
   compositionExportsTableId:
     process.env.APPWRITE_COMPOSITION_EXPORTS_COLLECTION_ID?.trim() || "composition_exports",
+  productIntelligenceTableId:
+    process.env.APPWRITE_PRODUCT_INTELLIGENCE_COLLECTION_ID?.trim() || "product_intelligence",
+  storyboardsTableId: process.env.APPWRITE_STORYBOARDS_COLLECTION_ID?.trim() || "storyboards",
+  demoScenesTableId: process.env.APPWRITE_DEMO_SCENES_COLLECTION_ID?.trim() || "demo_scenes",
+  qualityReviewsTableId:
+    process.env.APPWRITE_QUALITY_REVIEWS_COLLECTION_ID?.trim() || "quality_reviews",
+  directorArtifactsTableId:
+    process.env.APPWRITE_DIRECTOR_ARTIFACTS_COLLECTION_ID?.trim() || "director_artifacts",
   recordingsBucketId: process.env.APPWRITE_RECORDINGS_BUCKET_ID?.trim() || "demo-recordings",
+  evidenceBucketId: process.env.APPWRITE_EVIDENCE_BUCKET_ID?.trim() || "demo-evidence",
 };
 
 const client = new Client()
@@ -72,6 +81,9 @@ const schemas = [
       mediumtext("scene_script"),
       varchar("recording_locale", 16),
       mediumtext("source_viewport_json"),
+      varchar("product_intelligence_id", 36),
+      varchar("feature_candidate_id", 96),
+      varchar("storyboard_id", 36),
       varchar("status", 16, true),
       integer("progress_pct", true, 0, 100),
       varchar("current_step", 500),
@@ -157,6 +169,86 @@ const schemas = [
       keyIndex("workspace_composition_idx", ["workspace_id", "composition_id"]),
       keyIndex("workspace_demo_idx", ["workspace_id", "demo_id"]),
       keyIndex("workspace_status_idx", ["workspace_id", "render_status"]),
+    ],
+  },
+  {
+    id: config.productIntelligenceTableId,
+    name: "product_intelligence",
+    columns: [
+      varchar("workspace_id", 64, true),
+      varchar("project_id", 36, true),
+      integer("version", true, 1, 10_000),
+      mediumtext("intelligence_json", true),
+      floatColumn("global_confidence", true, 0, 1),
+    ],
+    indexes: [keyIndex("workspace_project_idx", ["workspace_id", "project_id"])],
+  },
+  {
+    id: config.storyboardsTableId,
+    name: "storyboards",
+    columns: [
+      varchar("workspace_id", 64, true),
+      varchar("project_id", 36, true),
+      varchar("demo_id", 36, true),
+      varchar("feature_candidate_id", 96, true),
+      integer("version", true, 1, 10_000),
+      mediumtext("storyboard_json", true),
+    ],
+    indexes: [keyIndex("workspace_demo_idx", ["workspace_id", "demo_id"])],
+  },
+  {
+    id: config.demoScenesTableId,
+    name: "demo_scenes",
+    columns: [
+      varchar("workspace_id", 64, true),
+      varchar("project_id", 36, true),
+      varchar("demo_id", 36, true),
+      varchar("storyboard_id", 36, true),
+      varchar("scene_key", 96, true),
+      integer("sequence", true, 0, 100),
+      mediumtext("capture_json", true),
+    ],
+    indexes: [
+      keyIndex("workspace_demo_idx", ["workspace_id", "demo_id"]),
+      uniqueIndex("demo_scene_unique", ["demo_id", "scene_key"]),
+    ],
+  },
+  {
+    id: config.qualityReviewsTableId,
+    name: "quality_reviews",
+    columns: [
+      varchar("workspace_id", 64, true),
+      varchar("project_id", 36, true),
+      varchar("demo_id", 36, true),
+      varchar("composition_export_id", 36),
+      mediumtext("review_json", true),
+      floatColumn("score", true, 0, 100),
+      varchar("status", 32, true),
+      integer("revision", true, 1, 10_000),
+    ],
+    indexes: [keyIndex("workspace_demo_idx", ["workspace_id", "demo_id"])],
+  },
+  {
+    id: config.directorArtifactsTableId,
+    name: "director_artifacts",
+    columns: [
+      varchar("workspace_id", 64, true),
+      varchar("project_id", 36, true),
+      varchar("demo_id", 36),
+      varchar("artifact_kind", 64, true),
+      varchar("cache_key", 128, true),
+      varchar("status", 32, true),
+      mediumtext("payload_json", true),
+      varchar("expires_at", 40),
+      varchar("provider", 32),
+      varchar("model", 160),
+      integer("duration_ms", false, 0, 3_600_000),
+      integer("revision", true, 0, 100),
+      mediumtext("failure_reason"),
+    ],
+    indexes: [
+      keyIndex("workspace_project_kind_idx", ["workspace_id", "project_id", "artifact_kind"]),
+      keyIndex("workspace_cache_idx", ["workspace_id", "cache_key"]),
     ],
   },
 ];
@@ -424,6 +516,28 @@ async function ensureBucket() {
   }
 }
 
+async function ensureEvidenceBucket() {
+  const settings = {
+    name: "demo-evidence",
+    permissions: [],
+    fileSecurity: false,
+    enabled: true,
+    maximumFileSize: 20 * 1024 * 1024,
+    allowedFileExtensions: ["jpg", "jpeg", "png", "webp"],
+    compression: Compression.None,
+    encryption: false,
+    antivirus: false,
+    transformations: false,
+  };
+  try {
+    await storage.getBucket({ bucketId: config.evidenceBucketId });
+    await storage.updateBucket({ bucketId: config.evidenceBucketId, ...settings });
+  } catch (error) {
+    if (!isNotFound(error)) throw error;
+    await storage.createBucket({ bucketId: config.evidenceBucketId, ...settings });
+  }
+}
+
 await ensureDatabase();
 for (const schema of schemas) {
   await ensureTable(schema);
@@ -431,5 +545,6 @@ for (const schema of schemas) {
   for (const index of schema.indexes) await ensureIndex(schema.id, index);
 }
 await ensureBucket();
+await ensureEvidenceBucket();
 
 console.info("WiseDemo Appwrite resources are ready. Revoke the temporary setup API key now.");

@@ -36,6 +36,7 @@ function safeRenderDirectory(exportId: string) {
 export async function renderCompositionToMp4(input: CompositionRenderInput): Promise<{
   bytes: Uint8Array;
   outputDuration: number;
+  localVideoPath: string;
 }> {
   const { workspaceRoot, jobDirectory, artifactRoot, artifactFile } = safeRenderDirectory(
     input.exportId,
@@ -50,6 +51,7 @@ export async function renderCompositionToMp4(input: CompositionRenderInput): Pro
     return {
       bytes: new Uint8Array(cached),
       outputDuration: totalCompositionDuration(input.composition, input.rawDurationSeconds),
+      localVideoPath: artifactFile,
     };
   }
 
@@ -104,6 +106,7 @@ export async function renderCompositionToMp4(input: CompositionRenderInput): Pro
     return {
       bytes,
       outputDuration: totalCompositionDuration(input.composition, input.rawDurationSeconds),
+      localVideoPath: artifactFile,
     };
   } finally {
     await rm(jobDirectory, { recursive: true, force: true }).catch(() => undefined);

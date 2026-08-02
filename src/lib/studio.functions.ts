@@ -37,8 +37,34 @@ import {
 import { planDemoScenes } from "./scene-planner.server";
 import { stableRecordingUrl } from "./demo-state";
 import { recordingLocaleSchema, type RecordingLocale } from "./recording-locale";
+import { buildProductIntelligence, replaceScreenshotEvidence } from "./product-intelligence.server";
+import { createLaunchStoryboard } from "./story-director.server";
+import type {
+  DemoSceneCapture,
+  DemoStoryboard,
+  FeatureCandidate,
+  PlannedBrowserAction,
+} from "./product-intelligence";
+import { serverEnv } from "./server-env.server";
+import {
+  normalizePublicProductIntelligence,
+  publicProductIntelligenceSchema,
+  type PublicProductIntelligence,
+} from "./public-product-intelligence";
+import {
+  creativeBriefSchema,
+  GeminiCreativeDirector,
+  type CreativeBrief,
+} from "./creative-director.server";
+import { runSingleSessionDirectedCapture } from "./single-session-director.server";
 
 type WorkspaceContext = { repository: WiseDemoRepository };
+type DirectedPreflight = {
+  candidate: FeatureCandidate;
+  storyboard: DemoStoryboard;
+  actions: CdpAction[];
+  recon: ReconResult;
+};
 
 // Authentication was removed for the experimental stage: every visitor works in
 // one shared workspace, and all database access goes through the Appwrite Server
@@ -58,6 +84,173 @@ async function loadCredentials(
   const credentials =
     row?.kind === "password" && row.ciphertext ? decryptProjectCredentials(row.ciphertext) : null;
   return { credentials, loginUrl: row?.login_url ?? null };
+}
+
+function directorCacheKey(projectUrl: string, suffix: string): string {
+  return `${suffix}:${new URL(projectUrl).hostname.toLowerCase()}`;
+}
+
+function expiresAt(milliseconds: number): string {
+  return new Date(Date.now() + milliseconds).toISOString();
+}
+
+function directorFeatureEnabled(): boolean {
+  return serverEnv("WISEDEMO_SINGLE_SESSION_DIRECTOR")?.toLowerCase() !== "false";
+}
+
+async function resolvePublicProductIntelligence(
+  context: WorkspaceContext,
+  project: {
+    id: string;
+    name: string;
+    base_url: string;
+    description: string | null;
+    site_map_md: string | null;
+  },
+  forceRefresh: boolean,
+): Promise<{ intelligence: PublicProductIntelligence; source: "context" | "legacy-fallback" }> {
+  const cacheKey = directorCacheKey(project.base_url, "public-intelligence");
+  if (!forceRefresh) {
+    const cached = await context.repository
+      .getCachedDirectorArtifact({
+        projectId: project.id,
+        artifactKind: "public-intelligence",
+        cacheKey,
+      })
+      .catch(() => null);
+    if (cached?.status === "ready") {
+      const parsed = publicProductIntelligenceSchema.safeParse(cached.payload_json);
+      if (parsed.success) return { intelligence: parsed.data, source: "context" };
+    }
+  }
+
+  try {
+    const { createContextClient } = await import("@/integrations/context/context-client.server");
+    const { ContextProductIntelligenceProvider } =
+      await import("@/integrations/context/context-product-intelligence.server");
+    const provider = new ContextProductIntelligenceProvider({ client: createContextClient() });
+    const intelligence = await provider.analyzePublicProduct({
+      url: project.base_url,
+      forceRefresh,
+    });
+    await context.repository.createDirectorArtifact({
+      project_id: project.id,
+      demo_id: null,
+      artifact_kind: "public-intelligence",
+      cache_key: cacheKey,
+      status: "ready",
+      payload_json: intelligence as unknown as Json,
+      expires_at: expiresAt(604_800_000),
+      provider: "context.dev",
+      model: null,
+      duration_ms: null,
+      revision: 0,
+      failure_reason: null,
+    });
+    await context.repository.createDirectorArtifact({
+      project_id: project.id,
+      demo_id: null,
+      artifact_kind: "brand-style",
+      cache_key: directorCacheKey(project.base_url, "brand-style"),
+      status: "ready",
+      payload_json: {
+        brand: intelligence.brand,
+        visualIdentity: intelligence.visualIdentity,
+      } as Json,
+      expires_at: expiresAt(2_592_000_000),
+      provider: "context.dev",
+      model: null,
+      duration_ms: null,
+      revision: 0,
+      failure_reason: null,
+    });
+    return { intelligence, source: "context" };
+  } catch (error) {
+    const fallback = normalizePublicProductIntelligence({
+      sourceUrl: project.base_url,
+      extract: {
+        data: {
+          name: project.name,
+          description: project.description,
+          audience: [],
+          valuePropositions: [],
+          features: [],
+          useCases: [],
+          callsToAction: [],
+        },
+        urls_analyzed: [project.base_url],
+      },
+      warnings: [
+        "Context.dev is unavailable. Legacy public metadata is available, but contains no verified feature plan.",
+      ],
+    });
+    await context.repository
+      .createDirectorArtifact({
+        project_id: project.id,
+        demo_id: null,
+        artifact_kind: "public-intelligence",
+        cache_key: cacheKey,
+        status: "unavailable",
+        payload_json: fallback as unknown as Json,
+        expires_at: null,
+        provider: "context.dev",
+        model: null,
+        duration_ms: null,
+        revision: 0,
+        failure_reason:
+          error instanceof Error ? error.message.slice(0, 300) : "Context.dev request failed.",
+      })
+      .catch(() => undefined);
+    return { intelligence: fallback, source: "legacy-fallback" };
+  }
+}
+
+async function createDirectorBrief(
+  context: WorkspaceContext,
+  project: {
+    id: string;
+    name: string;
+    base_url: string;
+    description: string | null;
+    site_map_md: string | null;
+  },
+  input: { featureBrief?: string | null; recordingLocale: RecordingLocale; demoId?: string | null },
+): Promise<{ brief: CreativeBrief; intelligence: PublicProductIntelligence }> {
+  if (!directorFeatureEnabled())
+    throw new Error(
+      "The one-session director path is disabled by WISEDEMO_SINGLE_SESSION_DIRECTOR.",
+    );
+  const { intelligence, source } = await resolvePublicProductIntelligence(context, project, false);
+  if (source !== "context" || !intelligence.features.length) {
+    throw new Error(
+      "Public product intelligence is unavailable or incomplete. A directed capture will not fall back to generic browsing.",
+    );
+  }
+  const { credentials } = await loadCredentials(context, project.id);
+  const { createGeminiClient } = await import("@/integrations/gemini/gemini-client.server");
+  const director = new GeminiCreativeDirector(createGeminiClient());
+  const brief = await director.createBrief({
+    intelligence,
+    featureBrief: input.featureBrief,
+    projectName: project.name,
+    requestedLanguage: input.recordingLocale === "arabic" ? "arabic" : "english",
+    credentialsAvailable: Boolean(credentials),
+  });
+  await context.repository.createDirectorArtifact({
+    project_id: project.id,
+    demo_id: input.demoId ?? null,
+    artifact_kind: "creative-brief",
+    cache_key: `${directorCacheKey(project.base_url, "creative-brief")}:${brief.selectedFeature.publicFeatureId}`,
+    status: "ready",
+    payload_json: brief as unknown as Json,
+    expires_at: expiresAt(604_800_000),
+    provider: "gemini",
+    model: serverEnv("GEMINI_PLANNING_MODEL") ?? "gemini-3.6-flash",
+    duration_ms: null,
+    revision: 0,
+    failure_reason: null,
+  });
+  return { brief, intelligence };
 }
 
 export const createProject = createServerFn({ method: "POST" })
@@ -115,6 +308,9 @@ export type DemoRecord = {
   scene_script: Json | null;
   recording_locale: RecordingLocale;
   source_viewport: SourceViewportMetadata | null;
+  product_intelligence_id: string | null;
+  feature_candidate_id: string | null;
+  storyboard_id: string | null;
   status: string;
   progress_pct: number;
   current_step: string | null;
@@ -196,6 +392,20 @@ export const getProjectWorkspace = createServerFn({ method: "GET" })
     if (!project) throw new Error("Project not found.");
 
     const demos = await context.repository.listDemos(data.projectId);
+    const [intelligence, storyboards, scenes, qualityReviews, directorArtifacts] =
+      await Promise.all([
+        context.repository.getLatestProductIntelligence(data.projectId).catch(() => null),
+        Promise.all(demos.map((demo) => context.repository.listStoryboards(demo.id)))
+          .then((items) => items.flat())
+          .catch(() => []),
+        Promise.all(demos.map((demo) => context.repository.listDemoScenes(demo.id)))
+          .then((items) => items.flat())
+          .catch(() => []),
+        Promise.all(demos.map((demo) => context.repository.listQualityReviews(demo.id)))
+          .then((items) => items.flat())
+          .catch(() => []),
+        context.repository.listDirectorArtifacts(data.projectId).catch(() => []),
+      ]);
 
     let credentials: {
       kind: "none" | "cookie" | "password";
@@ -222,7 +432,400 @@ export const getProjectWorkspace = createServerFn({ method: "GET" })
       project: project as ProjectRecord,
       demos: demos.map((demo) => withDurableRecordingUrl(demo)) as DemoRecord[],
       credentials,
+      intelligence,
+      storyboards,
+      scenes,
+      qualityReviews,
+      directorArtifacts,
     };
+  });
+
+function decodeBase64(value: string): Uint8Array {
+  const binary = atob(value);
+  return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+}
+
+function storyboardActionToCdp(action: PlannedBrowserAction): CdpAction {
+  const expected = { selector: action.expectedSelector, urlIncludes: action.expectedUrlIncludes };
+  if (action.type === "goto" && action.url)
+    return { type: "goto", url: action.url, waitMs: action.waitMs, expected };
+  if (action.type === "click" && action.selector)
+    return { type: "click", selector: action.selector, expected };
+  if (action.type === "type" && action.selector)
+    return { type: "type", selector: action.selector, text: action.text ?? "", expected };
+  if (action.type === "scroll") return { type: "scroll", deltaY: action.deltaY ?? 500, expected };
+  return { type: "wait", ms: action.waitMs ?? 1_000, expected };
+}
+
+export const analyzeProductIntelligence = createServerFn({ method: "POST" })
+  .inputValidator((data) =>
+    z
+      .object({
+        projectId: z.string().uuid(),
+        recordingLocale: recordingLocaleSchema.default("english"),
+      })
+      .parse(data),
+  )
+  .handler(async ({ data }) => {
+    const context = await workspaceContext();
+    const project = await context.repository.getProject(data.projectId);
+    if (!project) throw new Error("Project not found.");
+    const { credentials, loginUrl } = await loadCredentials(context, data.projectId);
+    let sessionId: string | null = null;
+    try {
+      const session = await createSteelSession(project.base_url, data.recordingLocale);
+      sessionId = session.id;
+      if (!session.websocketUrl)
+        throw new Error("The product intelligence session has no browser connection.");
+      const recon = await reconSite({
+        websocketUrl: session.websocketUrl,
+        baseUrl: project.base_url,
+        loginUrl,
+        credentials,
+        maxPages: 3,
+        recordingLocale: data.recordingLocale,
+      });
+      const rawIntelligence = buildProductIntelligence({
+        productName: project.name,
+        baseUrl: project.base_url,
+        recon,
+      });
+      const screenshotUrls = new Map<string, string>();
+      const { storeEvidenceScreenshot } =
+        await import("@/integrations/appwrite/evidence-storage.server");
+      for (const observation of recon.observations) {
+        if (!observation.screenshotBase64 || observation.sensitive) continue;
+        await storeEvidenceScreenshot(
+          observation.screenshotId,
+          decodeBase64(observation.screenshotBase64),
+        );
+        screenshotUrls.set(
+          observation.screenshotId,
+          `/api/public/evidence/${observation.screenshotId}`,
+        );
+      }
+      const intelligence = replaceScreenshotEvidence(rawIntelligence, screenshotUrls);
+      const previous = await context.repository.getLatestProductIntelligence(project.id);
+      const stored = await context.repository.createProductIntelligence({
+        project_id: project.id,
+        intelligence,
+        version: (previous?.version ?? 0) + 1,
+      });
+      await context.repository.updateProject(project.id, {
+        description: intelligence.valuePropositions[0]?.statement ?? project.description,
+        site_map_md: outlineToMarkdown(project.name, project.base_url, recon),
+        site_map_source: "agent",
+        site_map_updated_at: new Date().toISOString(),
+      });
+      return stored;
+    } finally {
+      if (sessionId) await releaseSteelSession(sessionId).catch(() => undefined);
+    }
+  });
+
+export const analyzePublicProduct = createServerFn({ method: "POST" })
+  .inputValidator((data) =>
+    z
+      .object({
+        projectId: z.string().uuid(),
+        forceRefresh: z.boolean().default(false),
+      })
+      .parse(data),
+  )
+  .handler(async ({ data }) => {
+    const context = await workspaceContext();
+    const project = await context.repository.getProject(data.projectId);
+    if (!project) throw new Error("Project not found.");
+    return resolvePublicProductIntelligence(context, project, data.forceRefresh);
+  });
+
+export const createDirectedDemo = createServerFn({ method: "POST" })
+  .inputValidator((data) =>
+    z
+      .object({
+        projectId: z.string().uuid(),
+        title: z.string().trim().min(2).max(100),
+        featureBrief: z.string().trim().max(1_000).optional(),
+        recordingLocale: recordingLocaleSchema.default("english"),
+      })
+      .parse(data),
+  )
+  .handler(async ({ data }) => {
+    const context = await workspaceContext();
+    const project = await context.repository.getProject(data.projectId);
+    if (!project) throw new Error("Project not found.");
+    let demo = await context.repository.createDemo({
+      project_id: project.id,
+      title: data.title,
+      feature_prompt:
+        data.featureBrief ?? "Create an evidence-backed product advertisement automatically.",
+      recording_locale: data.recordingLocale,
+      status: "planning",
+      progress_pct: 18,
+      current_step: "Analyzing public product and creating advertisement story...",
+      thumbnail_url: `/api/public/screenshot?url=${encodeURIComponent(project.base_url)}&width=1280`,
+    });
+    try {
+      const { brief } = await createDirectorBrief(context, project, {
+        featureBrief: data.featureBrief,
+        recordingLocale: data.recordingLocale,
+        demoId: demo.id,
+      });
+      demo = await context.repository.updateDemo(demo.id, {
+        status: "pending",
+        progress_pct: 30,
+        current_step: `Ready for one-session capture: ${brief.selectedFeature.name}.`,
+      });
+      await appendDemoEvent(
+        context,
+        demo.id,
+        "info",
+        "DIRECTOR_BRIEF_READY",
+        `Creative brief selected ${brief.selectedFeature.name} from public evidence.`,
+      );
+      return { demo: withDurableRecordingUrl(demo), brief };
+    } catch (error) {
+      demo = await context.repository.updateDemo(demo.id, {
+        status: "failed",
+        progress_pct: 0,
+        current_step: "Creative planning unavailable; generic capture was not started.",
+        error_message:
+          error instanceof Error ? error.message.slice(0, 500) : "Creative planning failed.",
+      });
+      await appendDemoEvent(
+        context,
+        demo.id,
+        "error",
+        "DIRECTOR_BRIEF_FAILED",
+        "Creative planning failed before any Steel session was created.",
+      );
+      throw error;
+    }
+  });
+
+export const captureDirectedDemo = createServerFn({ method: "POST" })
+  .inputValidator((data) => z.object({ demoId: z.string().uuid() }).parse(data))
+  .handler(async ({ data }) => {
+    const context = await workspaceContext();
+    const demo = await context.repository.getDemo(data.demoId);
+    if (!demo) throw new Error("Demo not found.");
+    if (["rendering", "ready"].includes(demo.status)) return withDurableRecordingUrl(demo);
+    if (!directorFeatureEnabled()) {
+      throw new Error(
+        "The one-session director path is disabled by WISEDEMO_SINGLE_SESSION_DIRECTOR.",
+      );
+    }
+    const claimed = await context.repository.claimDemoExecution(demo.id);
+    if (!claimed) return withDurableRecordingUrl(demo);
+    const project = await context.repository.getProject(demo.project_id);
+    if (!project) throw new Error("Project not found.");
+    const artifacts = await context.repository.listDirectorArtifacts(project.id);
+    const briefArtifact = artifacts.find(
+      (artifact) =>
+        artifact.demo_id === demo.id &&
+        artifact.artifact_kind === "creative-brief" &&
+        artifact.status === "ready",
+    );
+    if (!briefArtifact) throw new Error("This directed demo has no valid creative brief.");
+    const parsedBrief = creativeBriefSchema.safeParse(briefArtifact.payload_json);
+    if (!parsedBrief.success) throw new Error("This directed demo has no valid creative brief.");
+    const brief = parsedBrief.data;
+    const { credentials, loginUrl } = await loadCredentials(context, project.id);
+    const monotonicNow = () => performance.now();
+    try {
+      const capture = await runSingleSessionDirectedCapture<
+        Awaited<ReturnType<typeof createSteelSession>>,
+        DirectedPreflight
+      >({
+        startUrl: credentials ? (loginUrl ?? credentials.loginUrl) : project.base_url,
+        createSession: (startUrl) => createSteelSession(startUrl, demo.recording_locale),
+        releaseSession: releaseSteelSession,
+        finalActions: (preflight) => preflight.actions,
+        now: monotonicNow,
+        publishLiveSession: async (session) => {
+          await context.repository.updateDemo(demo.id, {
+            status: "recording",
+            progress_pct: 48,
+            current_step: "Preparing fictional demo state in the directed Steel session...",
+            steel_session_id: session.id,
+            live_view_url: session.liveViewUrl ?? session.debugUrl ?? null,
+            session_viewer_url: session.sessionViewerUrl ?? null,
+          });
+          await appendDemoEvent(
+            context,
+            demo.id,
+            "info",
+            "DIRECTOR_SESSION_STARTED",
+            "One Steel session opened for targeted preflight and final take.",
+          );
+        },
+        authenticate: credentials
+          ? async (websocketUrl) => {
+              const authenticated = await authenticateSite({
+                websocketUrl,
+                loginUrl: loginUrl ?? credentials.loginUrl,
+                credentials,
+                recordingLocale: demo.recording_locale,
+              });
+              await context.repository.updateDemo(demo.id, {
+                source_viewport: detectSourceViewport(authenticated.browserMetrics, {
+                  width: authenticated.browserMetrics.outerWidth,
+                  height: authenticated.browserMetrics.outerHeight,
+                }),
+              });
+            }
+          : undefined,
+        preflight: async (websocketUrl): Promise<DirectedPreflight> => {
+          if (brief.demoDataPlan.requiredEntities.length) {
+            throw new Error(
+              "The selected feature requires product-specific demo-data preparation. Add a safe product adapter before capture.",
+            );
+          }
+          const recon = await reconSite({
+            websocketUrl,
+            baseUrl: project.base_url,
+            loginUrl: null,
+            credentials: null,
+            maxPages: 2,
+            recordingLocale: demo.recording_locale,
+          });
+          const intelligence = buildProductIntelligence({
+            productName: project.name,
+            baseUrl: project.base_url,
+            recon,
+          });
+          const tokens = brief.selectedFeature.name
+            .toLowerCase()
+            .split(/[^a-z0-9]+/)
+            .filter((token) => token.length > 2);
+          const candidate = intelligence.featureCandidates.find((entry) =>
+            tokens.some((token) =>
+              `${entry.name} ${entry.userBenefit} ${entry.userProblem}`
+                .toLowerCase()
+                .includes(token),
+            ),
+          );
+          if (!candidate) {
+            throw new Error(
+              "Targeted preflight could not resolve the selected feature from the live DOM without inventing selectors.",
+            );
+          }
+          const storyboard = createLaunchStoryboard({ productName: project.name, candidate });
+          const actions = storyboard.scenes.flatMap((scene) =>
+            scene.actions.map(storyboardActionToCdp),
+          );
+          if (!actions.length)
+            throw new Error("Targeted preflight did not produce verified final-take actions.");
+          return { candidate, storyboard, actions, recon };
+        },
+        executeFinalTake: (websocketUrl, maxWallMs, preflight) =>
+          runScenesOverCdp(websocketUrl, preflight.actions, maxWallMs, demo.recording_locale, {
+            now: monotonicNow,
+          }),
+      });
+      const preflight = capture.preflight;
+      const storedStoryboard = await context.repository.createStoryboard({
+        project_id: project.id,
+        demo_id: demo.id,
+        feature_candidate_id: preflight.candidate.id,
+        storyboard: preflight.storyboard,
+      });
+      for (const [sequence, scene] of preflight.storyboard.scenes.entries()) {
+        await context.repository.upsertDemoScene({
+          project_id: project.id,
+          demo_id: demo.id,
+          storyboard_id: storedStoryboard.id,
+          scene_key: scene.id,
+          sequence,
+          capture: {
+            sceneId: scene.id,
+            sequence,
+            status: "captured",
+            sourceStartSeconds: Math.max(
+              0,
+              (capture.markers.takeStartedAtMs - capture.markers.sessionStartedAtMs) / 1_000,
+            ),
+            sourceDurationSeconds: Math.min(
+              60,
+              (capture.markers.takeEndedAtMs - capture.markers.takeStartedAtMs) / 1_000,
+            ),
+            retryCount: 0,
+            actionLog: capture.telemetry.map((event) => ({
+              actionId: event.id,
+              status: event.type === "error" ? ("failed" as const) : ("successful" as const),
+              startedAt: event.timestampMs,
+              completedAt: event.timestampMs,
+              cursor: event.cursor ?? undefined,
+              message: event.expectedResult ?? event.type,
+            })),
+            evidence: [],
+            failureReason: null,
+          },
+        });
+      }
+      await context.repository.createDirectorArtifact({
+        project_id: project.id,
+        demo_id: demo.id,
+        artifact_kind: "capture-plan",
+        cache_key: `${briefArtifact.cache_key}:capture-plan`,
+        status: "ready",
+        payload_json: {
+          captureIntent: brief.captureIntent,
+          takeMarkers: capture.markers,
+        } as unknown as Json,
+        expires_at: null,
+        provider: "steel.dev",
+        model: null,
+        duration_ms: Math.round(capture.markers.takeEndedAtMs - capture.markers.takeStartedAtMs),
+        revision: 0,
+        failure_reason: null,
+      });
+      await context.repository.createDirectorArtifact({
+        project_id: project.id,
+        demo_id: demo.id,
+        artifact_kind: "capture-telemetry",
+        cache_key: `${briefArtifact.cache_key}:telemetry`,
+        status: "ready",
+        payload_json: capture.telemetry as unknown as Json,
+        expires_at: null,
+        provider: "steel.dev",
+        model: null,
+        duration_ms: Math.round(capture.markers.takeEndedAtMs - capture.markers.takeStartedAtMs),
+        revision: 0,
+        failure_reason: null,
+      });
+      const rendering = await context.repository.updateDemo(demo.id, {
+        status: "rendering",
+        progress_pct: 80,
+        current_step: "Steel final take complete; finalizing the immutable raw recording...",
+        steel_session_id: capture.session.id,
+        storyboard_id: storedStoryboard.id,
+        feature_candidate_id: preflight.candidate.id,
+        live_view_url: null,
+        execution_started_at: null,
+      });
+      await appendDemoEvent(
+        context,
+        demo.id,
+        "info",
+        "DIRECTOR_TAKE_COMPLETE",
+        "One-session preflight and verified feature take completed; only render-time revisions remain.",
+      );
+      return withDurableRecordingUrl(rendering);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Directed one-session capture failed.";
+      const failed = await context.repository.updateDemo(demo.id, {
+        status: "failed",
+        progress_pct: 0,
+        current_step: "Directed capture failed before media finalization.",
+        error_code: "DIRECTOR_CAPTURE_FAILED",
+        error_message: message,
+        execution_started_at: null,
+      });
+      await appendDemoEvent(context, demo.id, "error", "DIRECTOR_CAPTURE_FAILED", message);
+      return withDurableRecordingUrl(failed);
+    }
   });
 
 export const scanProjectSite = createServerFn({ method: "POST" })
@@ -381,6 +984,7 @@ export const createDemoJob = createServerFn({ method: "POST" })
         title: z.string().trim().min(2).max(100),
         featurePrompt: z.string().trim().min(10).max(4000),
         recordingLocale: recordingLocaleSchema.default("english"),
+        featureCandidateId: z.string().min(1).max(96).optional(),
       })
       .parse(data),
   )
@@ -399,17 +1003,66 @@ export const createDemoJob = createServerFn({ method: "POST" })
       });
     }
 
+    const intelligence = data.featureCandidateId
+      ? await context.repository.getLatestProductIntelligence(data.projectId)
+      : null;
+    const candidate = intelligence?.intelligence_json.featureCandidates.find(
+      (entry) => entry.id === data.featureCandidateId,
+    );
+    if (data.featureCandidateId && (!intelligence || !candidate)) {
+      throw new Error(
+        "The selected product recommendation is no longer available. Re-run workflow analysis.",
+      );
+    }
+
     // Queue the durable database record before allocating external resources.
-    const demo = await context.repository.createDemo({
+    const demoCreate = {
       project_id: data.projectId,
       title: data.title,
       feature_prompt: data.featurePrompt,
       recording_locale: data.recordingLocale,
-      status: "pending",
+      status: "pending" as const,
       progress_pct: 5,
-      current_step: "Queued for a real cloud-browser recording…",
+      current_step: candidate
+        ? "Storyboard ready for review and scene capture."
+        : "Queued for a real cloud-browser recording…",
       thumbnail_url: `/api/public/screenshot?url=${encodeURIComponent(project.base_url)}&width=1280`,
-    });
+      ...(candidate && intelligence
+        ? { product_intelligence_id: intelligence.id, feature_candidate_id: candidate.id }
+        : {}),
+    };
+    let demo = await context.repository.createDemo(demoCreate);
+    if (candidate) {
+      const storyboard = createLaunchStoryboard({ productName: project.name, candidate });
+      const storedStoryboard = await context.repository.createStoryboard({
+        project_id: project.id,
+        demo_id: demo.id,
+        feature_candidate_id: candidate.id,
+        storyboard,
+      });
+      for (const [sequence, scene] of storyboard.scenes.entries()) {
+        const capture: DemoSceneCapture = {
+          sceneId: scene.id,
+          sequence,
+          status: "planned",
+          sourceStartSeconds: null,
+          sourceDurationSeconds: null,
+          retryCount: 0,
+          actionLog: [],
+          evidence: [],
+          failureReason: null,
+        };
+        await context.repository.upsertDemoScene({
+          project_id: project.id,
+          demo_id: demo.id,
+          storyboard_id: storedStoryboard.id,
+          scene_key: scene.id,
+          sequence,
+          capture,
+        });
+      }
+      demo = await context.repository.updateDemo(demo.id, { storyboard_id: storedStoryboard.id });
+    }
     await appendDemoEvent(
       context,
       demo.id,
@@ -419,6 +1072,242 @@ export const createDemoJob = createServerFn({ method: "POST" })
     );
 
     return withDurableRecordingUrl(demo);
+  });
+
+export const captureStoryboardDemo = createServerFn({ method: "POST" })
+  .inputValidator((data) => z.object({ demoId: z.string().uuid() }).parse(data))
+  .handler(async ({ data }) => {
+    const context = await workspaceContext();
+    const demo = await context.repository.getDemo(data.demoId);
+    if (!demo) throw new Error("Demo not found.");
+    if (!demo.storyboard_id) throw new Error("Create a product storyboard before scene capture.");
+    if (["rendering", "ready"].includes(demo.status)) return withDurableRecordingUrl(demo);
+    const claimed = await context.repository.claimDemoExecution(demo.id);
+    if (!claimed) return withDurableRecordingUrl(demo);
+    const [project, storyboard] = await Promise.all([
+      context.repository.getProject(demo.project_id),
+      context.repository.getStoryboard(demo.storyboard_id),
+    ]);
+    if (!project || !storyboard) throw new Error("Storyboard source data is unavailable.");
+    const { credentials, loginUrl } = await loadCredentials(context, demo.project_id);
+    const actionMap = storyboard.storyboard_json.scenes.flatMap((scene) =>
+      scene.actions.map((action) => ({ scene, action })),
+    );
+    if (!actionMap.length) throw new Error("The storyboard has no browser actions to capture.");
+
+    let recordingStartedAt = Date.now();
+    let authenticatedAt = recordingStartedAt;
+    try {
+      const recordingPass = await executeRecordingPass({
+        startUrl: credentials ? (loginUrl ?? credentials.loginUrl) : project.base_url,
+        createSession: (startUrl) => createSteelSession(startUrl, demo.recording_locale),
+        releaseSession: releaseSteelSession,
+        publishLiveSession: async (session) => {
+          recordingStartedAt = Date.now();
+          authenticatedAt = recordingStartedAt;
+          await context.repository.updateDemo(demo.id, {
+            status: "recording",
+            progress_pct: 58,
+            current_step: "Recording verified storyboard scenes…",
+            steel_session_id: session.id,
+            live_view_url: session.liveViewUrl ?? session.debugUrl ?? null,
+            session_viewer_url: session.sessionViewerUrl ?? null,
+          });
+          await appendDemoEvent(
+            context,
+            demo.id,
+            "info",
+            "SCENE_CAPTURE_STARTED",
+            `${storyboard.storyboard_json.scenes.length} editorial scenes are capturing in a fresh Steel session.`,
+          );
+        },
+        authenticate: credentials
+          ? async (websocketUrl) => {
+              const authenticated = await authenticateSite({
+                websocketUrl,
+                loginUrl: loginUrl ?? credentials.loginUrl,
+                credentials,
+                recordingLocale: demo.recording_locale,
+              });
+              await context.repository.updateDemo(demo.id, {
+                source_viewport: detectSourceViewport(authenticated.browserMetrics, {
+                  width: authenticated.browserMetrics.outerWidth,
+                  height: authenticated.browserMetrics.outerHeight,
+                }),
+              });
+              authenticatedAt = Date.now();
+            }
+          : undefined,
+        executeScenes: async (websocketUrl, maxWallMs) =>
+          runScenesOverCdp(
+            websocketUrl,
+            actionMap.map((entry) => storyboardActionToCdp(entry.action)),
+            maxWallMs,
+            demo.recording_locale,
+          ),
+      });
+      const diagnostics = recordingPass.execution.diagnostics;
+      let actionOffset = 0;
+      let previousEndSeconds = Math.max(0, (authenticatedAt - recordingStartedAt) / 1_000);
+      for (const [sequence, scene] of storyboard.storyboard_json.scenes.entries()) {
+        const sceneDiagnostics = diagnostics.slice(
+          actionOffset,
+          actionOffset + scene.actions.length,
+        );
+        actionOffset += scene.actions.length;
+        const successful = sceneDiagnostics.filter((entry) => entry.success);
+        const first = successful[0];
+        const last = successful.at(-1);
+        const firstStartedAt = first?.startedAt;
+        const sourceStartSeconds = firstStartedAt
+          ? Math.max(0, (firstStartedAt - recordingStartedAt) / 1_000)
+          : previousEndSeconds;
+        const sourceDurationSeconds =
+          firstStartedAt && last?.completedAt
+            ? Math.min(
+                scene.maxDurationSeconds,
+                Math.max(2, (last.completedAt - firstStartedAt) / 1_000 + 1.2),
+              )
+            : Math.min(scene.maxDurationSeconds, 5);
+        previousEndSeconds = sourceStartSeconds + sourceDurationSeconds;
+        const status =
+          scene.actions.length === 0 || successful.length === scene.actions.length
+            ? ("captured" as const)
+            : ("failed" as const);
+        const capture: DemoSceneCapture = {
+          sceneId: scene.id,
+          sequence,
+          status,
+          sourceStartSeconds,
+          sourceDurationSeconds,
+          retryCount: 0,
+          actionLog: scene.actions.map((action, index) => {
+            const diagnostic = sceneDiagnostics[index];
+            return {
+              actionId: action.id,
+              status: diagnostic?.success ? ("successful" as const) : ("failed" as const),
+              startedAt: diagnostic?.startedAt,
+              completedAt: diagnostic?.completedAt,
+              cursor: diagnostic?.cursor,
+              message: diagnostic?.message ?? "No action was executed for this scene.",
+            };
+          }),
+          evidence: [],
+          failureReason:
+            status === "failed"
+              ? (sceneDiagnostics.find((entry) => !entry.success)?.message ??
+                "A scene action failed.")
+              : null,
+        };
+        await context.repository.upsertDemoScene({
+          project_id: project.id,
+          demo_id: demo.id,
+          storyboard_id: storyboard.id,
+          scene_key: scene.id,
+          sequence,
+          capture,
+        });
+      }
+      await context.repository.updateDemo(demo.id, {
+        status: "rendering",
+        progress_pct: 80,
+        current_step: "Steel is finalizing the scene source recording…",
+        steel_session_id: recordingPass.session.id,
+        live_view_url: null,
+        execution_started_at: null,
+      });
+      await appendDemoEvent(
+        context,
+        demo.id,
+        "info",
+        "SCENE_CAPTURE_COMPLETE",
+        "Verified scenes are ready for media finalization and editorial composition.",
+      );
+      return withDurableRecordingUrl((await context.repository.getDemo(demo.id))!);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Storyboard scene capture failed.";
+      const failed = await context.repository.updateDemo(demo.id, {
+        status: "failed",
+        progress_pct: 0,
+        current_step: "Storyboard scene capture failed.",
+        error_code: "STORYBOARD_SCENE_CAPTURE_FAILED",
+        error_message: message,
+        execution_started_at: null,
+      });
+      await appendDemoEvent(context, demo.id, "error", "STORYBOARD_SCENE_CAPTURE_FAILED", message);
+      return withDurableRecordingUrl(failed);
+    }
+  });
+
+export const regenerateDemoStoryboard = createServerFn({ method: "POST" })
+  .inputValidator((data) => z.object({ demoId: z.string().uuid() }).parse(data))
+  .handler(async ({ data }) => {
+    const context = await workspaceContext();
+    const demo = await context.repository.getDemo(data.demoId);
+    if (!demo?.storyboard_id || !demo.product_intelligence_id || !demo.feature_candidate_id) {
+      throw new Error("This demo has no regeneratable product storyboard.");
+    }
+    const reviews = await context.repository.listQualityReviews(demo.id);
+    if (reviews.length >= 2) {
+      throw new Error(
+        "Storyboard revision limit reached. Review the flagged scene before trying again.",
+      );
+    }
+    const [intelligence, existing] = await Promise.all([
+      context.repository.getLatestProductIntelligence(demo.project_id),
+      context.repository.getStoryboard(demo.storyboard_id),
+    ]);
+    const candidate = intelligence?.intelligence_json.featureCandidates.find(
+      (entry) => entry.id === demo.feature_candidate_id,
+    );
+    if (!intelligence || !candidate || !existing)
+      throw new Error("The source recommendation is no longer available.");
+    const storyboard = createLaunchStoryboard({
+      productName: intelligence.intelligence_json.productName,
+      candidate,
+      revision: existing.version + 1,
+    });
+    const stored = await context.repository.createStoryboard({
+      project_id: demo.project_id,
+      demo_id: demo.id,
+      feature_candidate_id: candidate.id,
+      storyboard,
+    });
+    await context.repository.updateDemo(demo.id, {
+      storyboard_id: stored.id,
+      status: "pending",
+      current_step: "Storyboard revised from quality review feedback.",
+      error_code: null,
+      error_message: null,
+    });
+    for (const [sequence, scene] of storyboard.scenes.entries()) {
+      await context.repository.upsertDemoScene({
+        project_id: demo.project_id,
+        demo_id: demo.id,
+        storyboard_id: stored.id,
+        scene_key: scene.id,
+        sequence,
+        capture: {
+          sceneId: scene.id,
+          sequence,
+          status: "planned",
+          sourceStartSeconds: null,
+          sourceDurationSeconds: null,
+          retryCount: 0,
+          actionLog: [],
+          evidence: [],
+          failureReason: null,
+        },
+      });
+    }
+    await appendDemoEvent(
+      context,
+      demo.id,
+      "info",
+      "STORYBOARD_REVISED",
+      `Storyboard revision ${storyboard.revision} created after quality review.`,
+    );
+    return stored;
   });
 
 // Recon and planning use a disposable Steel session. The final artifact comes

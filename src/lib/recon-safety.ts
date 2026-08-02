@@ -9,3 +9,10 @@ export function isSafeReconNavigation(href: string, origin: string): boolean {
     return false;
   }
 }
+
+export function isSafeReconAction(label: string, selector = ""): boolean {
+  const value = `${label} ${selector}`.toLowerCase();
+  return !/logout|sign\s*out|delete|remove|destroy|cancel subscription|billing|payment|purchase|upgrade|downgrade|close account|revoke|invite|send|submit application/i.test(
+    value,
+  );
+}

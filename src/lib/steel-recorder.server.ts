@@ -54,6 +54,10 @@ export type ActionDiagnostic = {
   success: boolean;
   code: string;
   message: string;
+  startedAt?: number;
+  completedAt?: number;
+  cursor?: { x: number; y: number };
+  boundingBox?: { x: number; y: number; width: number; height: number };
 };
 
 export type SceneExecutionResult = {
@@ -504,9 +508,11 @@ export async function runScenesOverCdp(
   actions: CdpAction[],
   maxWallMs = 90_000,
   recordingLocale: RecordingLocale = DEFAULT_RECORDING_LOCALE,
+  options?: { now?: () => number },
 ): Promise<SceneExecutionResult> {
   const socket = await openCdp(websocketUrl);
-  const deadline = Date.now() + maxWallMs;
+  const now = options?.now ?? Date.now;
+  const deadline = now() + maxWallMs;
   const diagnostics: ActionDiagnostic[] = [];
   let msgId = 1;
   let executed = 0;
@@ -535,7 +541,10 @@ export async function runScenesOverCdp(
 
     for (let index = 0; index < actions.length; index += 1) {
       const action = actions[index];
-      if (Date.now() >= deadline) {
+      const startedAt = now();
+      let cursor: { x: number; y: number } | undefined;
+      let boundingBox: ActionDiagnostic["boundingBox"];
+      if (now() >= deadline) {
         error = "The scene run exceeded its wall-clock budget.";
         diagnostics.push({
           index,
@@ -591,14 +600,35 @@ export async function runScenesOverCdp(
         } else if (action.type === "click") {
           const candidates = normalizeSelectorCandidates(action.selector, action.fallbackSelectors);
           if (!candidates.length) throw new Error("Click action has no usable selector.");
-          const value = await evaluate(
+          const value = (await evaluate(
             elementExpression(
               candidates,
-              'if (!el) return false; el.scrollIntoView({ block: "center", inline: "center" }); el.click(); return true;',
+              'if (!el) return { success: false }; el.scrollIntoView({ block: "center", inline: "center" }); const rect = el.getBoundingClientRect(); el.click(); return { success: true, x: rect.x + rect.width / 2, y: rect.y + rect.height / 2, width: rect.width, height: rect.height };',
             ),
             timeoutMs,
-          );
-          if (value !== true) throw new Error("Click target was not found or was not visible.");
+          )) as {
+            success?: boolean;
+            x?: number;
+            y?: number;
+            width?: number;
+            height?: number;
+          } | null;
+          if (!value?.success) throw new Error("Click target was not found or was not visible.");
+          if (Number.isFinite(value.x) && Number.isFinite(value.y))
+            cursor = { x: value.x as number, y: value.y as number };
+          if (
+            Number.isFinite(value.x) &&
+            Number.isFinite(value.y) &&
+            Number.isFinite(value.width) &&
+            Number.isFinite(value.height)
+          ) {
+            boundingBox = {
+              x: (value.x as number) - (value.width as number) / 2,
+              y: (value.y as number) - (value.height as number) / 2,
+              width: value.width as number,
+              height: value.height as number,
+            };
+          }
           await delay(500);
         } else if (action.type === "type") {
           const candidates = normalizeSelectorCandidates(action.selector, action.fallbackSelectors);
@@ -640,6 +670,10 @@ export async function runScenesOverCdp(
           success: true,
           code: "ACTION_SUCCEEDED",
           message: `${action.type} action completed and was verified.`,
+          startedAt,
+          completedAt: now(),
+          cursor,
+          boundingBox,
         });
       } catch (actionError) {
         error = actionError instanceof Error ? actionError.message : String(actionError);
@@ -649,6 +683,8 @@ export async function runScenesOverCdp(
           success: false,
           code: "ACTION_FAILED",
           message: error,
+          startedAt,
+          completedAt: now(),
         });
         break;
       }

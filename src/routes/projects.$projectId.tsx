@@ -2,6 +2,8 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import {
   ArrowLeft,
+  BrainCircuit,
+  CheckCircle2,
   Download,
   ExternalLink,
   Film,
@@ -18,8 +20,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { autoComposeDirectedDemo } from "@/lib/composition.functions";
 import {
-  createDemoJob,
+  analyzePublicProduct,
+  captureStoryboardDemo,
+  captureDirectedDemo,
+  createDirectedDemo,
   finalizeDemoRecording,
   getDemoStatus,
   getProjectWorkspace,
@@ -62,7 +68,11 @@ function ProjectStudio() {
   const fetchWorkspace = useServerFn(getProjectWorkspace);
   const saveMap = useServerFn(saveProjectMap);
   const saveCredential = useServerFn(saveProjectCredential);
-  const createDemo = useServerFn(createDemoJob);
+  const createDemo = useServerFn(createDirectedDemo);
+  const analyzeIntelligence = useServerFn(analyzePublicProduct);
+  const captureDirected = useServerFn(captureDirectedDemo);
+  const autoCompose = useServerFn(autoComposeDirectedDemo);
+  const captureStoryboard = useServerFn(captureStoryboardDemo);
   const scanSite = useServerFn(scanProjectSite);
   const runScenes = useServerFn(runDemoScenes);
   const finalizeRecording = useServerFn(finalizeDemoRecording);
@@ -80,10 +90,15 @@ function ProjectStudio() {
   const [demoTitle, setDemoTitle] = useState("");
   const [featurePrompt, setFeaturePrompt] = useState("");
   const [recordingLocale, setRecordingLocale] = useState<RecordingLocale>("english");
-  const [busyAction, setBusyAction] = useState<"map" | "creds" | "demo" | "scan" | null>(null);
+  const [selectedFeatureId, setSelectedFeatureId] = useState<string | null>(null);
+  const [busyAction, setBusyAction] = useState<
+    "map" | "creds" | "demo" | "scan" | "intelligence" | "capture" | null
+  >(null);
   const [notice, setNotice] = useState<string | null>(null);
   const pollingRef = useRef<Set<string>>(new Set());
   const executionRef = useRef<Set<string>>(new Set());
+  const compositionRef = useRef<Set<string>>(new Set());
+  const directedRef = useRef<Set<string>>(new Set());
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -209,19 +224,89 @@ function ProjectStudio() {
     setNotice(null);
     setError(null);
     try {
-      const demo = await createDemo({
-        data: { projectId, title: demoTitle, featurePrompt, recordingLocale },
+      const directed = await createDemo({
+        data: {
+          projectId,
+          title: demoTitle,
+          featureBrief: featurePrompt,
+          recordingLocale,
+        },
       });
+      directedRef.current.add(directed.demo.id);
       setWorkspace((current) =>
-        current ? { ...current, demos: [demo, ...current.demos] } : current,
+        current ? { ...current, demos: [directed.demo, ...current.demos] } : current,
       );
-      setNotice("Demo queued. The live browser appears when reconnaissance starts.");
-      // Start the resumable server execution and immediately poll the durable
-      // database state. A refresh safely re-issues this idempotent request.
-      ensureExecution(demo.id);
-      startPolling(demo.id);
+      setNotice(
+        `Creative brief ready for ${directed.brief.selectedFeature.name}. Starting one-session capture automatically.`,
+      );
+      const captured = await captureDirected({ data: { demoId: directed.demo.id } });
+      setWorkspace((current) =>
+        current
+          ? {
+              ...current,
+              demos: current.demos.map((demo: Demo) =>
+                demo.id === captured.id ? { ...demo, ...captured } : demo,
+              ),
+            }
+          : current,
+      );
+      startPolling(directed.demo.id);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Could not queue the demo.");
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function handleAnalyzeIntelligence() {
+    setBusyAction("intelligence");
+    setNotice(null);
+    setError(null);
+    try {
+      const result = await analyzeIntelligence({ data: { projectId, forceRefresh: false } });
+      await load();
+      setNotice(
+        result.source === "context"
+          ? "Public product intelligence is ready for automatic feature selection."
+          : "Public product intelligence is incomplete; automatic capture will not start until Context.dev is available.",
+      );
+    } catch (analysisError) {
+      setError(
+        analysisError instanceof Error
+          ? analysisError.message
+          : "Could not analyze product workflows.",
+      );
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function handleCaptureStoryboard(demoId: string) {
+    setBusyAction("capture");
+    setError(null);
+    setNotice(null);
+    try {
+      const updated = await captureStoryboard({ data: { demoId } });
+      setWorkspace((current) =>
+        current
+          ? {
+              ...current,
+              demos: current.demos.map((demo: Demo) =>
+                demo.id === demoId ? { ...demo, ...updated } : demo,
+              ),
+            }
+          : current,
+      );
+      setNotice(
+        "Scene capture started. WiseDemo will finalize the raw source, then you can compose the story cut.",
+      );
+      startPolling(demoId);
+    } catch (captureError) {
+      setError(
+        captureError instanceof Error
+          ? captureError.message
+          : "Could not start storyboard scene capture.",
+      );
     } finally {
       setBusyAction(null);
     }
@@ -264,11 +349,26 @@ function ProjectStudio() {
             };
           });
           if (status.status === "ready" || status.status === "failed") {
+            if (status.status === "ready" && directedRef.current.has(demoId)) {
+              if (!compositionRef.current.has(demoId)) {
+                compositionRef.current.add(demoId);
+                await autoCompose({ data: { projectId, demoId } }).catch(
+                  (composeError: unknown) => {
+                    setError(
+                      composeError instanceof Error
+                        ? composeError.message
+                        : "Automatic composition could not start.",
+                    );
+                  },
+                );
+              }
+            }
             pollingRef.current.delete(demoId);
             return;
           }
           if (
-            ["pending", "starting", "scanning", "planning", "recording"].includes(status.status)
+            ["pending", "starting", "scanning", "planning", "recording"].includes(status.status) &&
+            !status.current_step?.includes("one-session")
           ) {
             ensureExecution(demoId);
           }
@@ -284,6 +384,18 @@ function ProjectStudio() {
               };
             });
             if (finalized?.status === "ready") {
+              if (directedRef.current.has(demoId) && !compositionRef.current.has(demoId)) {
+                compositionRef.current.add(demoId);
+                await autoCompose({ data: { projectId, demoId } }).catch(
+                  (composeError: unknown) => {
+                    setError(
+                      composeError instanceof Error
+                        ? composeError.message
+                        : "Automatic composition could not start.",
+                    );
+                  },
+                );
+              }
               pollingRef.current.delete(demoId);
               return;
             }
@@ -295,14 +407,18 @@ function ProjectStudio() {
       };
       setTimeout(tick, 2500);
     },
-    [ensureExecution, fetchDemoStatus, finalizeRecording],
+    [autoCompose, ensureExecution, fetchDemoStatus, finalizeRecording, projectId],
   );
 
   // Resume both execution and polling for in-flight demos after a refresh.
   useEffect(() => {
     if (!workspace) return;
     for (const demo of workspace.demos) {
-      if (["pending", "starting", "scanning", "planning", "recording"].includes(demo.status)) {
+      if (
+        ["pending", "starting", "scanning", "planning", "recording"].includes(demo.status) &&
+        !demo.storyboard_id &&
+        !demo.current_step?.includes("one-session")
+      ) {
         ensureExecution(demo.id);
       }
       if (
@@ -381,6 +497,61 @@ function ProjectStudio() {
             )}
 
             <section className="mt-8 grid gap-5 lg:grid-cols-2">
+              <div className="rounded-lg border border-primary/25 bg-primary/5 p-5 lg:col-span-2">
+                <div className="flex flex-wrap items-start justify-between gap-4">
+                  <div>
+                    <div className="flex items-center gap-3">
+                      <span className="flex h-9 w-9 items-center justify-center rounded-md bg-primary/15 text-primary">
+                        <BrainCircuit className="h-4 w-4" />
+                      </span>
+                      <div>
+                        <h2 className="font-semibold">Product intelligence</h2>
+                        <p className="text-sm text-muted-foreground">
+                          Public evidence informs the creative director before one-session capture.
+                        </p>
+                      </div>
+                    </div>
+                    <div className="mt-4 grid gap-2 text-xs text-muted-foreground sm:grid-cols-3">
+                      {[
+                        "Understand public value",
+                        "Choose the strongest feature",
+                        "Capture one verified take",
+                      ].map((label, index) => (
+                        <div
+                          key={label}
+                          className="rounded border border-border bg-background/70 px-3 py-2"
+                        >
+                          <span className="mr-2 text-primary">{index + 1}.</span>
+                          {label}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  <Button
+                    onClick={handleAnalyzeIntelligence}
+                    disabled={busyAction === "intelligence"}
+                  >
+                    {busyAction === "intelligence" ? (
+                      <Loader2 className="animate-spin" />
+                    ) : (
+                      <BrainCircuit />
+                    )}
+                    Analyze public product
+                  </Button>
+                </div>
+                {workspace.intelligence ? (
+                  <FeatureRecommendations
+                    intelligence={workspace.intelligence.intelligence_json}
+                    selectedFeatureId={selectedFeatureId}
+                    onSelect={setSelectedFeatureId}
+                  />
+                ) : (
+                  <p className="mt-4 text-sm text-muted-foreground">
+                    Analyze the public site to generate the evidence-backed creative brief
+                    automatically.
+                  </p>
+                )}
+              </div>
               <div className="rounded-lg border border-border bg-card p-5">
                 <div className="flex items-center gap-3">
                   <span className="flex h-9 w-9 items-center justify-center rounded-md bg-primary/15 text-primary">
@@ -514,7 +685,7 @@ function ProjectStudio() {
                     </label>
                     <Button onClick={handleCreateDemo} disabled={busyAction === "demo"}>
                       {busyAction === "demo" ? <Loader2 className="animate-spin" /> : <Play />}
-                      Create + render demo
+                      Create advertisement automatically
                     </Button>
                   </div>
                 </div>
@@ -540,6 +711,18 @@ function ProjectStudio() {
                       demo={demo}
                       projectId={projectId}
                       onRetryFinalization={handleRetryFinalization}
+                      storyboard={
+                        workspace.storyboards.find(
+                          (storyboard) => storyboard.id === demo.storyboard_id,
+                        ) ?? null
+                      }
+                      scenes={workspace.scenes.filter((scene) => scene.demo_id === demo.id)}
+                      qualityReview={
+                        workspace.qualityReviews.find((review) => review.demo_id === demo.id) ??
+                        null
+                      }
+                      onCaptureStoryboard={handleCaptureStoryboard}
+                      capturing={busyAction === "capture"}
                     />
                   ))}
                 </div>
@@ -556,10 +739,20 @@ function DemoRow({
   demo,
   projectId,
   onRetryFinalization,
+  storyboard,
+  scenes,
+  qualityReview,
+  onCaptureStoryboard,
+  capturing,
 }: {
   demo: Demo;
   projectId: string;
   onRetryFinalization: (demoId: string) => void;
+  storyboard: Workspace["storyboards"][number] | null;
+  scenes: Workspace["scenes"];
+  qualityReview: Workspace["qualityReviews"][number] | null;
+  onCaptureStoryboard: (demoId: string) => void;
+  capturing: boolean;
 }) {
   const { videoUrl, isLive, isReady, liveUrl } = getDemoPlaybackState(demo);
   const downloadUrl = demo.recording_file_id ? stableRecordingUrl(demo.id, true) : videoUrl;
@@ -594,6 +787,33 @@ function DemoRow({
           </div>
           <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">{demo.feature_prompt}</p>
           <div className="mt-2 text-sm text-muted-foreground">{demo.current_step ?? "Queued"}</div>
+          {storyboard ? (
+            <div className="mt-3 rounded-md border border-primary/20 bg-primary/5 p-3">
+              <div className="flex items-center gap-2 text-xs font-semibold text-primary">
+                <CheckCircle2 className="h-3.5 w-3.5" /> Storyboard v{storyboard.version}
+              </div>
+              <div className="mt-2 grid gap-1 text-xs text-muted-foreground">
+                {storyboard.storyboard_json.scenes.map((scene, index) => (
+                  <div key={scene.id}>
+                    <span className="mr-2 text-primary">{index + 1}.</span>
+                    {scene.purpose}: {scene.caption}
+                  </div>
+                ))}
+              </div>
+              <div className="mt-2 text-xs text-muted-foreground">
+                {scenes.filter((scene) => scene.capture_json.status === "captured").length}/
+                {storyboard.storyboard_json.scenes.length} scenes captured
+              </div>
+            </div>
+          ) : null}
+          {qualityReview ? (
+            <div className="mt-2 rounded-md border border-border bg-background/60 p-2 text-xs text-muted-foreground">
+              Quality review:{" "}
+              <span className="font-semibold text-foreground">
+                {qualityReview.score}/100, {qualityReview.status}
+              </span>
+            </div>
+          ) : null}
           {demo.error_message ? (
             <div className="mt-2 rounded-md border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive">
               {demo.error_message}
@@ -675,9 +895,82 @@ function DemoRow({
               Retry video finalization
             </Button>
           ) : null}
+          {storyboard && demo.status === "pending" ? (
+            <Button
+              type="button"
+              size="sm"
+              onClick={() => onCaptureStoryboard(demo.id)}
+              disabled={capturing}
+            >
+              <Play /> {capturing ? "Starting capture…" : "Capture storyboard scenes"}
+            </Button>
+          ) : null}
         </div>
       </div>
     </article>
+  );
+}
+
+function FeatureRecommendations({
+  intelligence,
+  selectedFeatureId,
+  onSelect,
+}: {
+  intelligence: NonNullable<Workspace["intelligence"]>["intelligence_json"];
+  selectedFeatureId: string | null;
+  onSelect: (id: string) => void;
+}) {
+  if (!intelligence.featureCandidates.length) {
+    return (
+      <p className="mt-4 text-sm text-muted-foreground">
+        No safe, meaningful workflow has enough evidence yet. Add a safe demo state and analyze
+        again.
+      </p>
+    );
+  }
+  return (
+    <div className="mt-5 grid gap-3 lg:grid-cols-3">
+      {intelligence.featureCandidates.map((candidate, index) => {
+        const screenshot = candidate.evidence.find(
+          (evidence) => evidence.type === "screenshot" && evidence.value.startsWith("/api/"),
+        );
+        return (
+          <button
+            key={candidate.id}
+            type="button"
+            onClick={() => onSelect(candidate.id)}
+            className={`rounded-lg border p-4 text-left transition ${
+              selectedFeatureId === candidate.id
+                ? "border-primary bg-primary/10"
+                : "border-border bg-background/70 hover:border-primary/50"
+            }`}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-mono-tight text-[11px] text-primary">#{index + 1}</span>
+              <span className="text-xs text-muted-foreground">
+                {Math.round(candidate.confidenceScore * 100)}% confidence
+              </span>
+            </div>
+            <h3 className="mt-2 font-semibold">{candidate.name}</h3>
+            <p className="mt-1 text-sm text-muted-foreground">{candidate.userBenefit}</p>
+            <p className="mt-3 text-xs text-muted-foreground">Shows: {candidate.expectedResult}</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Est. {candidate.estimatedDurationSeconds}s,{" "}
+              {candidate.requiredPreparation.length
+                ? candidate.requiredPreparation.join(" ")
+                : "No extra preparation"}
+            </p>
+            {screenshot ? (
+              <img
+                src={screenshot.value}
+                alt="Workflow evidence"
+                className="mt-3 aspect-video w-full rounded border border-border object-cover"
+              />
+            ) : null}
+          </button>
+        );
+      })}
+    </div>
   );
 }
 

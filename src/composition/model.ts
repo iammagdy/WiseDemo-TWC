@@ -86,6 +86,18 @@ export const compositionSchema = z.object({
     sourceCropRight: z.number().int().min(0).max(4000).default(0),
     sourceCropBottom: z.number().int().min(0).max(4000).default(0),
     sourceCropLeft: z.number().int().min(0).max(4000).default(0),
+    editorialCuts: z
+      .array(
+        z.object({
+          id: z.string().min(1).max(96),
+          sceneId: z.string().min(1).max(96).optional(),
+          sourceStartSeconds: z.number().min(0).max(86_400),
+          sourceDurationSeconds: z.number().min(0.2).max(60),
+          freezeSeconds: z.number().min(0).max(5),
+        }),
+      )
+      .max(32)
+      .default([]),
   }),
   animation: z.object({
     preset: z.enum([
@@ -189,8 +201,14 @@ export function totalCompositionDuration(
   composition: CompositionDesign,
   rawDurationSeconds: number,
 ): number {
+  const contentDuration = composition.recording.editorialCuts.length
+    ? composition.recording.editorialCuts.reduce(
+        (total, cut) => total + cut.sourceDurationSeconds + cut.freezeSeconds,
+        0,
+      )
+    : rawDurationSeconds;
   return (
-    rawDurationSeconds +
+    contentDuration +
     (composition.intro.enabled ? composition.intro.duration : 0) +
     (composition.outro.enabled ? composition.outro.duration : 0)
   );

@@ -3,6 +3,7 @@ import {
   AbsoluteFill,
   Audio,
   Easing,
+  Freeze,
   Img,
   OffthreadVideo,
   Sequence,
@@ -36,8 +37,22 @@ export function CompositionScene(props: CompositionRenderProps) {
   const { composition, rawDurationSeconds } = props;
   const introFrames = composition.intro.enabled ? Math.round(composition.intro.duration * fps) : 0;
   const rawFrames = Math.round(rawDurationSeconds * fps);
+  const editorialCuts = composition.recording.editorialCuts.length
+    ? composition.recording.editorialCuts
+    : [
+        {
+          id: "raw",
+          sourceStartSeconds: 0,
+          sourceDurationSeconds: rawDurationSeconds,
+          freezeSeconds: 0,
+        },
+      ];
+  const contentFrames = editorialCuts.reduce(
+    (total, cut) => total + Math.round((cut.sourceDurationSeconds + cut.freezeSeconds) * fps),
+    0,
+  );
   const outroFrames = composition.outro.enabled ? Math.round(composition.outro.duration * fps) : 0;
-  const contentFrame = Math.max(0, Math.min(rawFrames, frame - introFrames));
+  const contentFrame = Math.max(0, Math.min(contentFrames, frame - introFrames));
 
   return (
     <AbsoluteFill style={{ overflow: "hidden", color: "white" }}>
@@ -55,13 +70,17 @@ export function CompositionScene(props: CompositionRenderProps) {
           />
         </Sequence>
       ) : null}
-      <Sequence from={introFrames} durationInFrames={rawFrames} premountFor={fps}>
-        <RecordingFrame {...props} contentFrame={contentFrame} />
+      <Sequence from={introFrames} durationInFrames={contentFrames} premountFor={fps}>
+        <EditorialTimeline {...props} cuts={editorialCuts} contentFrame={contentFrame} />
         <CaptionLayer composition={composition} contentFrame={contentFrame} fps={fps} />
         <BrandingLayer composition={composition} />
       </Sequence>
       {outroFrames > 0 ? (
-        <Sequence from={introFrames + rawFrames} durationInFrames={outroFrames} premountFor={fps}>
+        <Sequence
+          from={introFrames + contentFrames}
+          durationInFrames={outroFrames}
+          premountFor={fps}
+        >
           <TitleCard
             title={composition.outro.title}
             subtitle={composition.outro.subtitle}
@@ -71,6 +90,53 @@ export function CompositionScene(props: CompositionRenderProps) {
         </Sequence>
       ) : null}
     </AbsoluteFill>
+  );
+}
+
+function EditorialTimeline(
+  props: CompositionRenderProps & {
+    cuts: CompositionRenderProps["composition"]["recording"]["editorialCuts"];
+    contentFrame: number;
+  },
+) {
+  const { fps } = useVideoConfig();
+  let cursor = 0;
+  return (
+    <>
+      {props.cuts.map((cut) => {
+        const sourceFrames = Math.max(1, Math.round(cut.sourceDurationSeconds * fps));
+        const freezeFrames = Math.max(0, Math.round(cut.freezeSeconds * fps));
+        const from = cursor;
+        cursor += sourceFrames + freezeFrames;
+        return (
+          <Sequence
+            key={cut.id}
+            from={from}
+            durationInFrames={sourceFrames + freezeFrames}
+            premountFor={fps}
+          >
+            <Sequence durationInFrames={sourceFrames}>
+              <RecordingFrame
+                {...props}
+                contentFrame={props.contentFrame}
+                sourceStartFrames={Math.round(cut.sourceStartSeconds * fps)}
+              />
+            </Sequence>
+            {freezeFrames > 0 ? (
+              <Sequence from={sourceFrames} durationInFrames={freezeFrames}>
+                <Freeze frame={sourceFrames - 1}>
+                  <RecordingFrame
+                    {...props}
+                    contentFrame={props.contentFrame}
+                    sourceStartFrames={Math.round(cut.sourceStartSeconds * fps)}
+                  />
+                </Freeze>
+              </Sequence>
+            ) : null}
+          </Sequence>
+        );
+      })}
+    </>
   );
 }
 
@@ -151,9 +217,10 @@ function Background({
 function RecordingFrame(
   props: CompositionRenderProps & {
     contentFrame: number;
+    sourceStartFrames?: number;
   },
 ) {
-  const { composition, rawVideoIsStatic, rawVideoUrl, contentFrame } = props;
+  const { composition, rawVideoIsStatic, rawVideoUrl, contentFrame, sourceStartFrames = 0 } = props;
   const { fps } = useVideoConfig();
   const definition = getFrameDefinition(composition.frame.id);
   const height = frameHeight(definition.id, composition.frame.width);
@@ -220,9 +287,13 @@ function RecordingFrame(
           }}
         >
           {rawVideoIsStatic ? (
-            <OffthreadVideo src={source} style={sourceVideoStyle(placement)} />
+            <OffthreadVideo
+              src={source}
+              startFrom={sourceStartFrames}
+              style={sourceVideoStyle(placement)}
+            />
           ) : (
-            <Video src={source} style={sourceVideoStyle(placement)} />
+            <Video src={source} startFrom={sourceStartFrames} style={sourceVideoStyle(placement)} />
           )}
         </div>
         {composition.animation.spotlights.map((spotlight) => {

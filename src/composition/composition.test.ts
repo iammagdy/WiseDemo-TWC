@@ -53,3 +53,12 @@ test("vertical restyling is independent from the landscape composition", () => {
   assert.equal(vertical.frame.id, "minimal-browser");
   assert.notDeepEqual(vertical, landscape);
 });
+
+test("editorial cuts replace dead raw time in the final duration", () => {
+  const composition = compositionFromTemplate("minimal-browser");
+  composition.recording.editorialCuts = [
+    { id: "one", sourceStartSeconds: 8, sourceDurationSeconds: 12, freezeSeconds: 1 },
+    { id: "two", sourceStartSeconds: 31, sourceDurationSeconds: 14, freezeSeconds: 0 },
+  ];
+  assert.equal(totalCompositionDuration(composition, 51), 29.7);
+});
