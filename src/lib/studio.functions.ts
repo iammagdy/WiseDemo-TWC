@@ -72,9 +72,11 @@ import {
 } from "./live-account-safety.server.ts";
 import { runSingleSessionDirectedCapture } from "./single-session-director.server";
 import {
+  assertPrivacyShieldActive,
   installWiseDemoPrivacyShield,
   removeWiseDemoPrivacyShield,
   withProductLocaleAdapterContext,
+  type PrivacyShieldCheckpointResult,
   type PrivacyShieldRegistration,
 } from "./steel-recon.server";
 import { canRemovePrivacyShield } from "./steel-privacy-shield.server";
@@ -737,6 +739,7 @@ export const captureDirectedDemo = createServerFn({ method: "POST" })
       failure_reason: null,
     });
     const monotonicNow = () => performance.now();
+    const privacyShieldCheckpoints: PrivacyShieldCheckpointResult[] = [];
     try {
       const capture = await runSingleSessionDirectedCapture<
         Awaited<ReturnType<typeof createSteelSession>>,
@@ -745,8 +748,11 @@ export const captureDirectedDemo = createServerFn({ method: "POST" })
         LiveAccountSafetyAudit,
         PrivacyShieldRegistration
       >({
-        startUrl: "about:blank",
-        createSession: (startUrl) => createSteelSession(startUrl, demo.recording_locale),
+        sessionBootstrapUrl: "about:blank",
+        productLoginUrl: loginUrl ?? credentials.loginUrl,
+        productStartUrl: project.base_url,
+        createSession: (sessionBootstrapUrl) =>
+          createSteelSession(sessionBootstrapUrl, demo.recording_locale),
         releaseSession: releaseSteelSession,
         finalActions: (preflight) => preflight.actions,
         now: monotonicNow,
@@ -769,6 +775,15 @@ export const captureDirectedDemo = createServerFn({ method: "POST" })
         },
         installPrivacyShield: (websocketUrl) =>
           installWiseDemoPrivacyShield({ websocketUrl, recordingLocale: demo.recording_locale }),
+        assertPrivacyShield: async (websocketUrl, checkpoint) => {
+          privacyShieldCheckpoints.push(
+            await assertPrivacyShieldActive({
+              websocketUrl,
+              checkpoint,
+              recordingLocale: demo.recording_locale,
+            }),
+          );
+        },
         removePrivacyShield: async (websocketUrl, preflight, registration) => {
           if (!canRemovePrivacyShield(preflight.adapterPlan.finalVisibleSafety))
             throw new Error("WiseResume fixture viewport is not safe for the final take.");
@@ -779,13 +794,16 @@ export const captureDirectedDemo = createServerFn({ method: "POST" })
           });
         },
         authenticate: credentials
-          ? async (websocketUrl) => {
+          ? async (websocketUrl, productUrls) => {
               const authenticated = await authenticateSite({
                 websocketUrl,
-                loginUrl: loginUrl ?? credentials.loginUrl,
+                loginUrl: productUrls.productLoginUrl ?? loginUrl ?? credentials.loginUrl,
                 credentials,
                 recordingLocale: demo.recording_locale,
                 privacyShielded: true,
+                onPrivacyShieldCheckpoint: (result) => {
+                  privacyShieldCheckpoints.push(result);
+                },
               });
               await context.repository.updateDemo(demo.id, {
                 source_viewport: detectSourceViewport(authenticated.browserMetrics, {
@@ -801,7 +819,7 @@ export const captureDirectedDemo = createServerFn({ method: "POST" })
             recordingLocale: demo.recording_locale,
             execute: (adapterContext) =>
               auditWiseResumeFixtureIsolationAccount(adapterContext, {
-                expectedCredentialIdentifier: credentials.username,
+                expectedAccountFingerprint: accountFingerprint,
                 accountFingerprint,
                 storedFixture,
               }),
@@ -827,6 +845,15 @@ export const captureDirectedDemo = createServerFn({ method: "POST" })
                   LiveAccountSafetyAudit | undefined,
                 storedFixture,
                 accountFingerprint,
+                assertPrivacyShield: async (checkpoint) => {
+                  privacyShieldCheckpoints.push(
+                    await assertPrivacyShieldActive({
+                      websocketUrl,
+                      checkpoint,
+                      recordingLocale: demo.recording_locale,
+                    }),
+                  );
+                },
               }),
           });
           const candidate = {
@@ -898,6 +925,27 @@ export const captureDirectedDemo = createServerFn({ method: "POST" })
           }),
       });
       const preflight = capture.preflight;
+      await context.repository.createDirectorArtifact({
+        project_id: project.id,
+        demo_id: demo.id,
+        artifact_kind: "privacy-shield-checkpoints",
+        cache_key: boundedArtifactCacheKey(briefArtifact.cache_key, "privacy-shield-checkpoints"),
+        status: "ready",
+        payload_json: privacyShieldCheckpoints.map(
+          ({ checkpoint, active, repaired, timestampMs }) => ({
+            checkpoint,
+            active,
+            repaired,
+            timestampMs,
+          }),
+        ) as Json,
+        expires_at: null,
+        provider: "wisedemo",
+        model: null,
+        duration_ms: null,
+        revision: 0,
+        failure_reason: null,
+      });
       await context.repository.createDirectorArtifact({
         project_id: project.id,
         demo_id: demo.id,
@@ -1021,6 +1069,34 @@ export const captureDirectedDemo = createServerFn({ method: "POST" })
       );
       return withDurableRecordingUrl(rendering);
     } catch (error) {
+      if (privacyShieldCheckpoints.length) {
+        await context.repository
+          .createDirectorArtifact({
+            project_id: project.id,
+            demo_id: demo.id,
+            artifact_kind: "privacy-shield-checkpoints",
+            cache_key: boundedArtifactCacheKey(
+              briefArtifact.cache_key,
+              "privacy-shield-checkpoints",
+            ),
+            status: "ready",
+            payload_json: privacyShieldCheckpoints.map(
+              ({ checkpoint, active, repaired, timestampMs }) => ({
+                checkpoint,
+                active,
+                repaired,
+                timestampMs,
+              }),
+            ) as Json,
+            expires_at: null,
+            provider: "wisedemo",
+            model: null,
+            duration_ms: null,
+            revision: 1,
+            failure_reason: null,
+          })
+          .catch(() => undefined);
+      }
       if (error instanceof LiveAccountSafetyError) {
         await context.repository
           .createDirectorArtifact({

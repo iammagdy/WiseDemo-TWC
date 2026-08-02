@@ -65,8 +65,10 @@ export async function runSingleSessionDirectedCapture<
   LiveAudit = unknown,
   PrivacyShield = unknown,
 >(options: {
-  startUrl: string;
-  createSession: (startUrl: string) => Promise<Session>;
+  sessionBootstrapUrl: string;
+  productLoginUrl?: string;
+  productStartUrl?: string;
+  createSession: (sessionBootstrapUrl: string) => Promise<Session>;
   releaseSession: (sessionId: string) => Promise<Session>;
   publishLiveSession: (session: Session) => Promise<void>;
   installPrivacyShield?: (websocketUrl: string) => Promise<PrivacyShield>;
@@ -75,7 +77,11 @@ export async function runSingleSessionDirectedCapture<
     preflight: Preflight,
     privacyShield: PrivacyShield | undefined,
   ) => Promise<void>;
-  authenticate?: (websocketUrl: string) => Promise<void>;
+  assertPrivacyShield?: (websocketUrl: string, checkpoint: string) => Promise<void>;
+  authenticate?: (
+    websocketUrl: string,
+    productUrls: { productLoginUrl?: string; productStartUrl?: string },
+  ) => Promise<void>;
   liveAccountSafetyAudit?: (websocketUrl: string) => Promise<LiveAudit>;
   assertMutationAllowed?: (audit: LiveAudit | undefined) => void;
   preflight: (
@@ -116,18 +122,30 @@ export async function runSingleSessionDirectedCapture<
   let released = false;
   let privacyShield: PrivacyShield | undefined;
   try {
-    session = await options.createSession(options.startUrl);
+    session = await options.createSession(options.sessionBootstrapUrl);
     if (!session.websocketUrl)
       throw new Error("The Steel session did not provide a browser connection.");
     const websocketUrl = session.websocketUrl;
     await options.publishLiveSession(session);
     if (options.installPrivacyShield)
       privacyShield = await options.installPrivacyShield(websocketUrl);
-    if (options.authenticate) await options.authenticate(websocketUrl);
+    if (options.assertPrivacyShield) {
+      await options.assertPrivacyShield(websocketUrl, "after-session-creation");
+      await options.assertPrivacyShield(websocketUrl, "before-login-navigation");
+    }
+    if (options.authenticate)
+      await options.authenticate(websocketUrl, {
+        productLoginUrl: options.productLoginUrl,
+        productStartUrl: options.productStartUrl,
+      });
+    if (options.assertPrivacyShield)
+      await options.assertPrivacyShield(websocketUrl, "before-account-audit");
     const liveAccountSafetyAudit = options.liveAccountSafetyAudit
       ? await options.liveAccountSafetyAudit(websocketUrl)
       : undefined;
     options.assertMutationAllowed?.(liveAccountSafetyAudit);
+    if (options.assertPrivacyShield)
+      await options.assertPrivacyShield(websocketUrl, "before-fixture-discovery");
     const preflight = await executeWithinBudget(
       () =>
         options.preflight(websocketUrl, options.preflightMaxMs ?? 20_000, liveAccountSafetyAudit),

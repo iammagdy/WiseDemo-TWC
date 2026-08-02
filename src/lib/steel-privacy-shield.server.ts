@@ -6,6 +6,13 @@ export type PrivacyShieldRegistration = {
   fixtureMaskScriptId: string;
 };
 
+export type PrivacyShieldCheckpointResult = {
+  checkpoint: string;
+  active: boolean;
+  repaired: boolean;
+  timestampMs: number;
+};
+
 export type PrivacyShieldRemovalInput = {
   fixtureActive: boolean;
   unrelatedResumeTitlesVisible: boolean;
@@ -37,7 +44,12 @@ export function privacyShieldDocumentScript(): string {
         fontFamily: "Georgia, serif", fontSize: "24px", fontWeight: "600",
         letterSpacing: "0.02em", textAlign: "center", pointerEvents: "all",
       });
-      (document.documentElement || document.body).appendChild(shield);
+      const root = document.documentElement || document.body;
+      if (!root) {
+        window.setTimeout(install, 0);
+        return;
+      }
+      root.appendChild(shield);
     };
     if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", install, { once: true });
     else install();

@@ -31,9 +31,13 @@ import {
   privacyShieldInstallExpression,
   privacyShieldIsActiveExpression,
   privacyShieldRemoveExpression,
+  type PrivacyShieldCheckpointResult,
   type PrivacyShieldRegistration,
 } from "./steel-privacy-shield.server";
-export type { PrivacyShieldRegistration } from "./steel-privacy-shield.server";
+export type {
+  PrivacyShieldCheckpointResult,
+  PrivacyShieldRegistration,
+} from "./steel-privacy-shield.server";
 import {
   detectSensitiveContent,
   scoreMeaningfulStateChange,
@@ -160,6 +164,38 @@ async function evaluate(cdp: Cdp, expression: string): Promise<unknown> {
   return result.result?.value;
 }
 
+async function ensurePrivacyShieldInCdp(
+  cdp: Cdp,
+  checkpoint: string,
+): Promise<PrivacyShieldCheckpointResult> {
+  const timestampMs = Date.now();
+  if ((await evaluate(cdp, privacyShieldIsActiveExpression())) === true) {
+    return { checkpoint, active: true, repaired: false, timestampMs };
+  }
+  await evaluate(cdp, fixtureViewportMaskDocumentScript());
+  await evaluate(cdp, privacyShieldInstallExpression());
+  if ((await evaluate(cdp, privacyShieldIsActiveExpression())) !== true)
+    throw new Error("The WiseDemo privacy shield could not be restored before inspection.");
+  return { checkpoint, active: true, repaired: true, timestampMs };
+}
+
+export async function assertPrivacyShieldActive(input: {
+  websocketUrl: string;
+  checkpoint: string;
+  recordingLocale?: RecordingLocale;
+}): Promise<PrivacyShieldCheckpointResult> {
+  const cdp = await attach(input.websocketUrl, input.recordingLocale ?? DEFAULT_RECORDING_LOCALE);
+  try {
+    return await ensurePrivacyShieldInCdp(cdp, input.checkpoint);
+  } finally {
+    try {
+      cdp.socket.close();
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
 export async function installWiseDemoPrivacyShield(input: {
   websocketUrl: string;
   recordingLocale?: RecordingLocale;
@@ -182,10 +218,7 @@ export async function installWiseDemoPrivacyShield(input: {
     )) as { identifier?: string };
     if (!shield.identifier || !mask.identifier)
       throw new Error("The WiseDemo privacy shield could not be registered before login.");
-    await evaluate(cdp, fixtureViewportMaskDocumentScript());
-    await evaluate(cdp, privacyShieldInstallExpression());
-    if ((await evaluate(cdp, privacyShieldIsActiveExpression())) !== true)
-      throw new Error("The WiseDemo privacy shield was not active before login.");
+    await ensurePrivacyShieldInCdp(cdp, "after-session-creation");
     return { shieldScriptId: shield.identifier, fixtureMaskScriptId: mask.identifier };
   } finally {
     try {
@@ -683,8 +716,11 @@ async function signIn(
   target: string,
   credentials: NonNullable<DecryptedCredentials>,
   privacyShielded = false,
+  onPrivacyShieldCheckpoint?: (result: PrivacyShieldCheckpointResult) => Promise<void> | void,
 ): Promise<PageOutline> {
   await goto(cdp, target, 3500);
+  if (privacyShielded)
+    await onPrivacyShieldCheckpoint?.(await ensurePrivacyShieldInCdp(cdp, "after-login-page-load"));
   const filled = (await evaluate(
     cdp,
     `(() => {
@@ -723,6 +759,10 @@ async function signIn(
     })()`,
     15_000,
   );
+  if (privacyShielded)
+    await onPrivacyShieldCheckpoint?.(
+      await ensurePrivacyShieldInCdp(cdp, "after-submitting-login"),
+    );
   const afterLogin = privacyShielded
     ? {
         url: (await evaluate(cdp, "location.href")) as string,
@@ -737,6 +777,10 @@ async function signIn(
   if (!afterLogin) {
     throw new Error("Could not inspect the page after credential sign-in.");
   }
+  if (privacyShielded)
+    await onPrivacyShieldCheckpoint?.(
+      await ensurePrivacyShieldInCdp(cdp, "after-authenticated-redirect"),
+    );
   const stillOnLogin = privacyShielded
     ? !leftLoginForm
     : /password/i.test(JSON.stringify(afterLogin.inputs));
@@ -760,12 +804,23 @@ export async function authenticateSite(input: {
   credentials: NonNullable<DecryptedCredentials>;
   recordingLocale?: RecordingLocale;
   privacyShielded?: boolean;
+  onPrivacyShieldCheckpoint?: (result: PrivacyShieldCheckpointResult) => Promise<void> | void;
 }): Promise<AuthenticatedSiteResult> {
   const recordingLocale = input.recordingLocale ?? DEFAULT_RECORDING_LOCALE;
   const cdp = await attach(input.websocketUrl, recordingLocale);
   try {
-    await signIn(cdp, input.loginUrl, input.credentials, input.privacyShielded === true);
+    await signIn(
+      cdp,
+      input.loginUrl,
+      input.credentials,
+      input.privacyShielded === true,
+      input.onPrivacyShieldCheckpoint,
+    );
     const localeState = await ensureApplicationLocale(cdp, recordingLocale);
+    if (input.privacyShielded)
+      await input.onPrivacyShieldCheckpoint?.(
+        await ensurePrivacyShieldInCdp(cdp, "after-locale-navigation"),
+      );
     const authenticatedOutline = input.privacyShielded
       ? {
           url: (await evaluate(cdp, "location.href")) as string,

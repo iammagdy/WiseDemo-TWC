@@ -8,7 +8,7 @@ test("directed capture uses one session and records a trim-ready take", async ()
   let created = 0;
   let released = 0;
   const result = await runSingleSessionDirectedCapture({
-    startUrl: "https://product.example.test",
+    sessionBootstrapUrl: "about:blank",
     createSession: async () => {
       created += 1;
       time += 5;
@@ -66,7 +66,7 @@ test("directed capture uses one session and records a trim-ready take", async ()
 test("directed capture verifies the final take before recording its end marker", async () => {
   let time = 0;
   const result = await runSingleSessionDirectedCapture({
-    startUrl: "https://product.example.test",
+    sessionBootstrapUrl: "about:blank",
     createSession: async () => ({ id: "steel-1", websocketUrl: "ws://steel" }),
     releaseSession: async () => ({ id: "steel-1" }),
     publishLiveSession: async () => undefined,
@@ -90,7 +90,7 @@ test("unsafe live safety audit releases the only session before mutation", async
   let preflightCalled = false;
   await assert.rejects(
     runSingleSessionDirectedCapture({
-      startUrl: "https://product.example.test",
+      sessionBootstrapUrl: "about:blank",
       createSession: async () => {
         created += 1;
         return { id: "steel-1", websocketUrl: "ws://steel" };
@@ -121,7 +121,7 @@ test("unsafe live safety audit releases the only session before mutation", async
 test("privacy shield is installed before authentication and removed only after preflight", async () => {
   const order: string[] = [];
   await runSingleSessionDirectedCapture({
-    startUrl: "about:blank",
+    sessionBootstrapUrl: "about:blank",
     createSession: async () => ({ id: "steel-1", websocketUrl: "ws://steel" }),
     releaseSession: async () => ({ id: "steel-1" }),
     publishLiveSession: async () => {

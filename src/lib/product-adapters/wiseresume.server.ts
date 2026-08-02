@@ -645,11 +645,9 @@ function resumeRecordIdFromUrl(value: string): string | null {
 
 async function readWiseResumeFixtureInventory(
   context: ProductLocaleAdapterContext,
-  expectedCredentialIdentifier: string,
 ): Promise<WiseResumeFixtureInventoryFacts> {
   const facts = asRecord(
     await context.evaluate(`(() => {
-      const expected = ${JSON.stringify(expectedCredentialIdentifier.toLowerCase())};
       const fixtureTitle = ${JSON.stringify(WISE_RESUME_FIXTURE_TITLE)};
       const visible = (element) => { const rect = element.getBoundingClientRect(); const style = getComputedStyle(element); return rect.width > 4 && rect.height > 4 && style.display !== "none" && style.visibility !== "hidden"; };
       const recordId = (element) => {
@@ -672,11 +670,9 @@ async function readWiseResumeFixtureInventory(
         const marker = element.getAttribute("data-wisedemo-fixture") === "smart-tailoring" || String(element.textContent || "").includes(fixtureTitle);
         records.set(id, { fixture: current.fixture || marker });
       }
-      const identityNodes = Array.from(document.querySelectorAll("[data-user-email], [data-testid*=account], [data-testid*=profile], [aria-label*=account], [aria-label*=profile]"));
-      const authenticatedAccountConfirmed = Boolean(expected) && identityNodes.some((node) => String(node.getAttribute("data-user-email") || node.getAttribute("aria-label") || node.textContent || "").toLowerCase().includes(expected));
       const inventoryResolved = records.size > 0 || Boolean(document.querySelector("[data-testid*=resume], [data-testid*=empty], [class*=resume]"));
       return {
-        authenticatedAccountConfirmed,
+        authenticatedAccountConfirmed: false,
         inventoryResolved,
         totalResumeCount: records.size,
         fixtureRecordIds: Array.from(records.entries()).filter(([, value]) => value.fixture).map(([id]) => id),
@@ -695,10 +691,63 @@ async function readWiseResumeFixtureInventory(
   };
 }
 
+export function evaluateWiseResumeAuthenticatedIdentity(input: {
+  identitySourceAvailable: boolean;
+  expectedAccountFingerprint: string;
+  liveAccountFingerprint: string | null;
+}): { identitySourceAvailable: boolean; authenticatedAccountConfirmed: boolean } {
+  return {
+    identitySourceAvailable: input.identitySourceAvailable,
+    authenticatedAccountConfirmed:
+      input.identitySourceAvailable &&
+      input.liveAccountFingerprint !== null &&
+      input.liveAccountFingerprint === input.expectedAccountFingerprint,
+  };
+}
+
+async function readWiseResumeAuthenticatedIdentity(
+  context: ProductLocaleAdapterContext,
+  expectedAccountFingerprint: string,
+): Promise<{ identitySourceAvailable: boolean; authenticatedAccountConfirmed: boolean }> {
+  const response = asRecord(
+    await context.evaluate(`(async () => {
+      const fingerprint = (value) => {
+        let hash = 2166136261;
+        for (const character of value.trim().toLowerCase()) {
+          hash ^= character.charCodeAt(0);
+          hash = Math.imul(hash, 16777619);
+        }
+        return (hash >>> 0).toString(16);
+      };
+      try {
+        const accountResponse = await fetch("https://fra.cloud.appwrite.io/v1/account", {
+          credentials: "include",
+          headers: { "X-Appwrite-Project": "69fd362b001eb325a192" },
+        });
+        if (!accountResponse.ok)
+          return { identitySourceAvailable: false, liveAccountFingerprint: null };
+        const account = await accountResponse.json();
+        const identifier = typeof account.email === "string" ? account.email : "";
+        return {
+          identitySourceAvailable: identifier.length > 0,
+          liveAccountFingerprint: identifier ? fingerprint(identifier) : null,
+        };
+      } catch {
+        return { identitySourceAvailable: false, liveAccountFingerprint: null };
+      }
+    })()`),
+  );
+  return evaluateWiseResumeAuthenticatedIdentity({
+    identitySourceAvailable: response?.identitySourceAvailable === true,
+    expectedAccountFingerprint,
+    liveAccountFingerprint: asString(response?.liveAccountFingerprint),
+  });
+}
+
 export async function auditWiseResumeFixtureIsolationAccount(
   context: ProductLocaleAdapterContext,
   input: {
-    expectedCredentialIdentifier: string;
+    expectedAccountFingerprint: string;
     accountFingerprint: string;
     storedFixture: WiseResumeFixtureReference | null;
   },
@@ -719,11 +768,23 @@ export async function auditWiseResumeFixtureIsolationAccount(
       auditedAt: new Date().toISOString(),
     };
   }
-  const facts = await readWiseResumeFixtureInventory(context, input.expectedCredentialIdentifier);
+  const facts = await readWiseResumeFixtureInventory(context);
+  const identity = await readWiseResumeAuthenticatedIdentity(
+    context,
+    input.expectedAccountFingerprint,
+  );
   const audit = createWiseResumeFixtureIsolationAudit({
     ...facts,
+    authenticatedAccountConfirmed: identity.authenticatedAccountConfirmed,
     storedFixture: input.storedFixture,
   });
+  if (!identity.identitySourceAvailable && audit.status !== "unsafe") {
+    return {
+      ...audit,
+      status: "inconclusive",
+      reasons: [...audit.reasons, "Authenticated account identity source was unavailable."],
+    };
+  }
   if (!facts.inventoryResolved && audit.status === "safe") {
     return {
       ...audit,
@@ -832,6 +893,7 @@ export async function prepareWiseResumeFixtureSmartTailoring(
     liveAccountSafetyAudit: LiveAccountSafetyAudit | undefined;
     storedFixture: WiseResumeFixtureReference | null;
     accountFingerprint: string;
+    assertPrivacyShield?: (checkpoint: string) => Promise<void>;
   },
 ): Promise<WiseResumeFixtureSmartTailoringPlan> {
   if (!(await isWiseResume(context)))
@@ -871,6 +933,7 @@ export async function prepareWiseResumeFixtureSmartTailoring(
     targetResumeId: route.recordId,
     operation: "prepare fixture resume",
   });
+  await input.assertPrivacyShield?.("before-fixture-resume-navigation");
   await context.goto(resumeUrl, 1_200);
   const fixtureDocument = [WISE_RESUME_FIXTURE_TITLE, resumeDocument(resume)].join("\n");
   const prepared = asRecord(
@@ -898,8 +961,10 @@ export async function prepareWiseResumeFixtureSmartTailoring(
   );
   const workflowHref = asString(workflow?.href);
   const workflowSelector = asString(workflow?.selector);
-  if (workflowHref && workflow?.origin === route.origin) await context.goto(workflowHref, 1_200);
-  else if (workflowSelector) {
+  if (workflowHref && workflow?.origin === route.origin) {
+    await input.assertPrivacyShield?.("before-fixture-workflow-navigation");
+    await context.goto(workflowHref, 1_200);
+  } else if (workflowSelector) {
     const opened = await context.evaluate(
       `(() => { const target = document.querySelector(${JSON.stringify(workflowSelector)}); if (!target) return false; target.click(); return true; })()`,
     );
@@ -940,6 +1005,7 @@ export async function prepareWiseResumeFixtureSmartTailoring(
     );
   if (jobPrepared.privateDataDetected === true)
     throw new Error("WiseResume fixture viewport contains sensitive data.");
+  await input.assertPrivacyShield?.("before-final-fixture-navigation");
   await context.goto(resumeUrl, 1_000);
   const finalVisibleSafety = await readWiseResumeFinalVisibleSafety(context, fixture);
   assertWiseResumeFinalVisibleContentSafe(finalVisibleSafety);

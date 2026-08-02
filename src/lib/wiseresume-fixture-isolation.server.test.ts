@@ -13,6 +13,7 @@ import {
 } from "./wiseresume-fixture-isolation.server.ts";
 import {
   evaluateWiseResumeFixtureViewportSafety,
+  evaluateWiseResumeAuthenticatedIdentity,
   wiseResumeFixtureRouteExpression,
   wiseResumeFixtureWriteExpression,
 } from "./product-adapters/wiseresume.server.ts";
@@ -88,6 +89,25 @@ test("fixture conflicts and unresolved identity cannot unlock mutation", () => {
   assert.equal(unresolved.status, "inconclusive");
   assert.throws(() => assertWiseResumeFixtureCreationAllowed(ambiguous));
   assert.throws(() => assertWiseResumeFixtureCreationAllowed(unresolved));
+});
+
+test("authenticated account identity compares only opaque in-memory fingerprints", () => {
+  assert.deepEqual(
+    evaluateWiseResumeAuthenticatedIdentity({
+      identitySourceAvailable: true,
+      expectedAccountFingerprint: "fixture-account-fingerprint",
+      liveAccountFingerprint: "fixture-account-fingerprint",
+    }),
+    { identitySourceAvailable: true, authenticatedAccountConfirmed: true },
+  );
+  assert.deepEqual(
+    evaluateWiseResumeAuthenticatedIdentity({
+      identitySourceAvailable: false,
+      expectedAccountFingerprint: "fixture-account-fingerprint",
+      liveAccountFingerprint: null,
+    }),
+    { identitySourceAvailable: false, authenticatedAccountConfirmed: false },
+  );
 });
 
 test("fixture mutation rejects missing, broad, or destructive targets", () => {
