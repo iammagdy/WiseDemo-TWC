@@ -63,11 +63,18 @@ export async function runSingleSessionDirectedCapture<
   Preflight,
   Verification = unknown,
   LiveAudit = unknown,
+  PrivacyShield = unknown,
 >(options: {
   startUrl: string;
   createSession: (startUrl: string) => Promise<Session>;
   releaseSession: (sessionId: string) => Promise<Session>;
   publishLiveSession: (session: Session) => Promise<void>;
+  installPrivacyShield?: (websocketUrl: string) => Promise<PrivacyShield>;
+  removePrivacyShield?: (
+    websocketUrl: string,
+    preflight: Preflight,
+    privacyShield: PrivacyShield | undefined,
+  ) => Promise<void>;
   authenticate?: (websocketUrl: string) => Promise<void>;
   liveAccountSafetyAudit?: (websocketUrl: string) => Promise<LiveAudit>;
   assertMutationAllowed?: (audit: LiveAudit | undefined) => void;
@@ -107,12 +114,15 @@ export async function runSingleSessionDirectedCapture<
   const sessionStartedAtMs = now();
   let session: Session | null = null;
   let released = false;
+  let privacyShield: PrivacyShield | undefined;
   try {
     session = await options.createSession(options.startUrl);
     if (!session.websocketUrl)
       throw new Error("The Steel session did not provide a browser connection.");
     const websocketUrl = session.websocketUrl;
     await options.publishLiveSession(session);
+    if (options.installPrivacyShield)
+      privacyShield = await options.installPrivacyShield(websocketUrl);
     if (options.authenticate) await options.authenticate(websocketUrl);
     const liveAccountSafetyAudit = options.liveAccountSafetyAudit
       ? await options.liveAccountSafetyAudit(websocketUrl)
@@ -123,6 +133,8 @@ export async function runSingleSessionDirectedCapture<
         options.preflight(websocketUrl, options.preflightMaxMs ?? 20_000, liveAccountSafetyAudit),
       options.preflightMaxMs ?? 20_000,
     );
+    if (options.removePrivacyShield)
+      await options.removePrivacyShield(websocketUrl, preflight, privacyShield);
     const takeStartedAtMs = now();
     const execution = await executeWithinBudget(
       () => options.executeFinalTake(websocketUrl, recordingActionBudgetMs(0), preflight),

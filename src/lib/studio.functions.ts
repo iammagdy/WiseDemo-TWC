@@ -57,10 +57,10 @@ import {
   type CreativeBrief,
 } from "./creative-director.server";
 import {
-  prepareWiseResumeSmartTailoring,
-  auditWiseResumeLiveAccount,
+  auditWiseResumeFixtureIsolationAccount,
+  prepareWiseResumeFixtureSmartTailoring,
   verifyWiseResumeSmartTailoringTransformation,
-  type WiseResumeSmartTailoringPlan,
+  type WiseResumeFixtureSmartTailoringPlan,
 } from "./product-adapters/wiseresume.server";
 import {
   LiveAccountSafetyError,
@@ -71,14 +71,25 @@ import {
   type LiveAccountSafetyAudit,
 } from "./live-account-safety.server.ts";
 import { runSingleSessionDirectedCapture } from "./single-session-director.server";
-import { withProductLocaleAdapterContext } from "./steel-recon.server";
+import {
+  installWiseDemoPrivacyShield,
+  removeWiseDemoPrivacyShield,
+  withProductLocaleAdapterContext,
+  type PrivacyShieldRegistration,
+} from "./steel-recon.server";
+import { canRemovePrivacyShield } from "./steel-privacy-shield.server";
+import {
+  parseWiseResumeFixtureReference,
+  serializeWiseResumeFixtureReference,
+  wiseResumeAccountFingerprint,
+} from "./wiseresume-fixture-isolation.server";
 
 type WorkspaceContext = { repository: WiseDemoRepository };
 type DirectedPreflight = {
   candidate: FeatureCandidate;
   storyboard: DemoStoryboard;
   actions: CdpAction[];
-  adapterPlan: WiseResumeSmartTailoringPlan;
+  adapterPlan: WiseResumeFixtureSmartTailoringPlan;
 };
 
 // Authentication was removed for the experimental stage: every visitor works in
@@ -689,6 +700,13 @@ export const captureDirectedDemo = createServerFn({ method: "POST" })
     if (!credentials)
       throw new Error("Directed WiseResume capture requires encrypted test credentials.");
     const credentialMeta = await context.repository.getCredential(project.id);
+    const accountFingerprint = wiseResumeAccountFingerprint(credentials.username);
+    const storedFixture = parseWiseResumeFixtureReference(
+      artifacts.find(
+        (artifact) =>
+          artifact.artifact_kind === "wiseresume-fixture-reference" && artifact.status === "ready",
+      )?.payload_json,
+    );
     const mapState = classifyAuthenticatedMap({
       credentialSavedAt: credentialMeta?.updated_at,
       authenticatedMapUpdatedAt: project.site_map_updated_at,
@@ -722,9 +740,12 @@ export const captureDirectedDemo = createServerFn({ method: "POST" })
     try {
       const capture = await runSingleSessionDirectedCapture<
         Awaited<ReturnType<typeof createSteelSession>>,
-        DirectedPreflight
+        DirectedPreflight,
+        unknown,
+        LiveAccountSafetyAudit,
+        PrivacyShieldRegistration
       >({
-        startUrl: credentials ? (loginUrl ?? credentials.loginUrl) : project.base_url,
+        startUrl: "about:blank",
         createSession: (startUrl) => createSteelSession(startUrl, demo.recording_locale),
         releaseSession: releaseSteelSession,
         finalActions: (preflight) => preflight.actions,
@@ -746,6 +767,17 @@ export const captureDirectedDemo = createServerFn({ method: "POST" })
             "One Steel session opened for targeted preflight and final take.",
           );
         },
+        installPrivacyShield: (websocketUrl) =>
+          installWiseDemoPrivacyShield({ websocketUrl, recordingLocale: demo.recording_locale }),
+        removePrivacyShield: async (websocketUrl, preflight, registration) => {
+          if (!canRemovePrivacyShield(preflight.adapterPlan.finalVisibleSafety))
+            throw new Error("WiseResume fixture viewport is not safe for the final take.");
+          await removeWiseDemoPrivacyShield({
+            websocketUrl,
+            recordingLocale: demo.recording_locale,
+            registration,
+          });
+        },
         authenticate: credentials
           ? async (websocketUrl) => {
               const authenticated = await authenticateSite({
@@ -753,6 +785,7 @@ export const captureDirectedDemo = createServerFn({ method: "POST" })
                 loginUrl: loginUrl ?? credentials.loginUrl,
                 credentials,
                 recordingLocale: demo.recording_locale,
+                privacyShielded: true,
               });
               await context.repository.updateDemo(demo.id, {
                 source_viewport: detectSourceViewport(authenticated.browserMetrics, {
@@ -767,7 +800,11 @@ export const captureDirectedDemo = createServerFn({ method: "POST" })
             websocketUrl,
             recordingLocale: demo.recording_locale,
             execute: (adapterContext) =>
-              auditWiseResumeLiveAccount(adapterContext, credentials.username),
+              auditWiseResumeFixtureIsolationAccount(adapterContext, {
+                expectedCredentialIdentifier: credentials.username,
+                accountFingerprint,
+                storedFixture,
+              }),
           }),
         assertMutationAllowed: (audit) =>
           assertLiveAccountMutationAllowed(audit as LiveAccountSafetyAudit | undefined),
@@ -785,9 +822,11 @@ export const captureDirectedDemo = createServerFn({ method: "POST" })
             websocketUrl,
             recordingLocale: demo.recording_locale,
             execute: (adapterContext) =>
-              prepareWiseResumeSmartTailoring(adapterContext, {
+              prepareWiseResumeFixtureSmartTailoring(adapterContext, {
                 liveAccountSafetyAudit: liveAccountSafetyAudit as
                   LiveAccountSafetyAudit | undefined,
+                storedFixture,
+                accountFingerprint,
               }),
           });
           const candidate = {
@@ -859,6 +898,20 @@ export const captureDirectedDemo = createServerFn({ method: "POST" })
           }),
       });
       const preflight = capture.preflight;
+      await context.repository.createDirectorArtifact({
+        project_id: project.id,
+        demo_id: demo.id,
+        artifact_kind: "wiseresume-fixture-reference",
+        cache_key: boundedArtifactCacheKey(briefArtifact.cache_key, "wiseresume-fixture"),
+        status: "ready",
+        payload_json: serializeWiseResumeFixtureReference(preflight.adapterPlan.fixture) as Json,
+        expires_at: null,
+        provider: "wisedemo",
+        model: null,
+        duration_ms: null,
+        revision: 0,
+        failure_reason: null,
+      });
       await context.repository.createDirectorArtifact({
         project_id: project.id,
         demo_id: demo.id,

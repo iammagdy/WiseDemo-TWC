@@ -117,3 +117,47 @@ test("unsafe live safety audit releases the only session before mutation", async
   assert.equal(released, 1);
   assert.equal(preflightCalled, false);
 });
+
+test("privacy shield is installed before authentication and removed only after preflight", async () => {
+  const order: string[] = [];
+  await runSingleSessionDirectedCapture({
+    startUrl: "about:blank",
+    createSession: async () => ({ id: "steel-1", websocketUrl: "ws://steel" }),
+    releaseSession: async () => ({ id: "steel-1" }),
+    publishLiveSession: async () => {
+      order.push("publish");
+    },
+    installPrivacyShield: async () => {
+      order.push("install-shield");
+      return { shield: true };
+    },
+    authenticate: async () => {
+      order.push("authenticate");
+    },
+    liveAccountSafetyAudit: async () => ({ status: "safe" }),
+    assertMutationAllowed: () => {
+      order.push("audit-approved");
+    },
+    preflight: async () => {
+      order.push("preflight");
+      return { safe: true };
+    },
+    removePrivacyShield: async () => {
+      order.push("remove-shield");
+    },
+    executeFinalTake: async () => {
+      order.push("take");
+      return { executed: 1, completed: true, diagnostics: [] };
+    },
+    finalActions: [],
+  });
+  assert.deepEqual(order, [
+    "publish",
+    "install-shield",
+    "authenticate",
+    "audit-approved",
+    "preflight",
+    "remove-shield",
+    "take",
+  ]);
+});

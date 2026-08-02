@@ -26,6 +26,15 @@ import {
   type ProductLocaleAdapterContext,
 } from "./product-adapters/wiseresume.server";
 import {
+  fixtureViewportMaskDocumentScript,
+  privacyShieldDocumentScript,
+  privacyShieldInstallExpression,
+  privacyShieldIsActiveExpression,
+  privacyShieldRemoveExpression,
+  type PrivacyShieldRegistration,
+} from "./steel-privacy-shield.server";
+export type { PrivacyShieldRegistration } from "./steel-privacy-shield.server";
+import {
   detectSensitiveContent,
   scoreMeaningfulStateChange,
   summarizeDomState,
@@ -149,6 +158,71 @@ async function evaluate(cdp: Cdp, expression: string): Promise<unknown> {
     cdp.sid,
   )) as { result?: { value?: unknown } };
   return result.result?.value;
+}
+
+export async function installWiseDemoPrivacyShield(input: {
+  websocketUrl: string;
+  recordingLocale?: RecordingLocale;
+}): Promise<PrivacyShieldRegistration> {
+  const cdp = await attach(input.websocketUrl, input.recordingLocale ?? DEFAULT_RECORDING_LOCALE);
+  try {
+    const shield = (await cdpCall(
+      cdp.socket,
+      cdp.nextId(),
+      "Page.addScriptToEvaluateOnNewDocument",
+      { source: privacyShieldDocumentScript() },
+      cdp.sid,
+    )) as { identifier?: string };
+    const mask = (await cdpCall(
+      cdp.socket,
+      cdp.nextId(),
+      "Page.addScriptToEvaluateOnNewDocument",
+      { source: fixtureViewportMaskDocumentScript() },
+      cdp.sid,
+    )) as { identifier?: string };
+    if (!shield.identifier || !mask.identifier)
+      throw new Error("The WiseDemo privacy shield could not be registered before login.");
+    await evaluate(cdp, fixtureViewportMaskDocumentScript());
+    await evaluate(cdp, privacyShieldInstallExpression());
+    if ((await evaluate(cdp, privacyShieldIsActiveExpression())) !== true)
+      throw new Error("The WiseDemo privacy shield was not active before login.");
+    return { shieldScriptId: shield.identifier, fixtureMaskScriptId: mask.identifier };
+  } finally {
+    try {
+      cdp.socket.close();
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+export async function removeWiseDemoPrivacyShield(input: {
+  websocketUrl: string;
+  registration: PrivacyShieldRegistration | undefined;
+  recordingLocale?: RecordingLocale;
+}): Promise<void> {
+  if (!input.registration)
+    throw new Error("The WiseDemo privacy shield registration is unavailable.");
+  const cdp = await attach(input.websocketUrl, input.recordingLocale ?? DEFAULT_RECORDING_LOCALE);
+  try {
+    await cdpCall(
+      cdp.socket,
+      cdp.nextId(),
+      "Page.removeScriptToEvaluateOnNewDocument",
+      { identifier: input.registration.shieldScriptId },
+      cdp.sid,
+    );
+    if ((await evaluate(cdp, privacyShieldRemoveExpression())) !== true)
+      throw new Error("The WiseDemo privacy shield could not be removed for the final take.");
+    if ((await evaluate(cdp, privacyShieldIsActiveExpression())) === true)
+      throw new Error("The WiseDemo privacy shield remained visible at take start.");
+  } finally {
+    try {
+      cdp.socket.close();
+    } catch {
+      /* ignore */
+    }
+  }
 }
 
 async function goto(cdp: Cdp, url: string, waitMs = 3000) {
@@ -608,6 +682,7 @@ async function signIn(
   cdp: Cdp,
   target: string,
   credentials: NonNullable<DecryptedCredentials>,
+  privacyShielded = false,
 ): Promise<PageOutline> {
   await goto(cdp, target, 3500);
   const filled = (await evaluate(
@@ -648,11 +723,23 @@ async function signIn(
     })()`,
     15_000,
   );
-  const afterLogin = await outline(cdp);
+  const afterLogin = privacyShielded
+    ? {
+        url: (await evaluate(cdp, "location.href")) as string,
+        title: "",
+        headings: [],
+        navLinks: [],
+        clickables: [],
+        inputs: [],
+        visibleText: "",
+      }
+    : await outline(cdp);
   if (!afterLogin) {
     throw new Error("Could not inspect the page after credential sign-in.");
   }
-  const stillOnLogin = /password/i.test(JSON.stringify(afterLogin.inputs));
+  const stillOnLogin = privacyShielded
+    ? !leftLoginForm
+    : /password/i.test(JSON.stringify(afterLogin.inputs));
   if (
     !isVerifiedLoginOutcome({
       fieldsApplied: filled.filled === true,
@@ -672,13 +759,24 @@ export async function authenticateSite(input: {
   loginUrl: string;
   credentials: NonNullable<DecryptedCredentials>;
   recordingLocale?: RecordingLocale;
+  privacyShielded?: boolean;
 }): Promise<AuthenticatedSiteResult> {
   const recordingLocale = input.recordingLocale ?? DEFAULT_RECORDING_LOCALE;
   const cdp = await attach(input.websocketUrl, recordingLocale);
   try {
-    await signIn(cdp, input.loginUrl, input.credentials);
+    await signIn(cdp, input.loginUrl, input.credentials, input.privacyShielded === true);
     const localeState = await ensureApplicationLocale(cdp, recordingLocale);
-    const authenticatedOutline = await outline(cdp);
+    const authenticatedOutline = input.privacyShielded
+      ? {
+          url: (await evaluate(cdp, "location.href")) as string,
+          title: "",
+          headings: [],
+          navLinks: [],
+          clickables: [],
+          inputs: [],
+          visibleText: "",
+        }
+      : await outline(cdp);
     if (!authenticatedOutline) throw new Error("Could not inspect the authenticated application.");
     return {
       outline: authenticatedOutline,

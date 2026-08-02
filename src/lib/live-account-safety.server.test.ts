@@ -12,10 +12,14 @@ import {
 
 const safeAudit: LiveAccountSafetyAudit = {
   status: "safe",
+  mode: "empty-account",
   authenticatedAccountConfirmed: true,
-  resumeCount: 0,
+  totalResumeCount: 0,
   fixtureResumeCount: 0,
   nonFixtureResumeCount: 0,
+  fixtureIsolated: true,
+  privacyShieldActive: true,
+  mutationScopeLockedToFixture: false,
   personalDataMarkersFound: false,
   reasons: [],
   auditedAt: "2026-08-02T00:00:00.000Z",
@@ -33,7 +37,7 @@ test("newer credentials make an old authenticated map stale rather than unsafe",
 test("safe empty and fixture-only accounts unlock only the fictional mutation path", () => {
   assert.doesNotThrow(() => assertLiveAccountMutationAllowed(safeAudit));
   assert.doesNotThrow(() =>
-    assertLiveAccountMutationAllowed({ ...safeAudit, resumeCount: 1, fixtureResumeCount: 1 }),
+    assertLiveAccountMutationAllowed({ ...safeAudit, totalResumeCount: 1, fixtureResumeCount: 1 }),
   );
 });
 

@@ -2,10 +2,14 @@ export type AuthenticatedMapState = "authoritative" | "stale" | "pending-live-ac
 
 export type LiveAccountSafetyAudit = {
   status: "safe" | "unsafe" | "inconclusive";
+  mode: "empty-account" | "fixture-isolation";
   authenticatedAccountConfirmed: boolean;
-  resumeCount: number;
+  totalResumeCount: number;
   fixtureResumeCount: number;
   nonFixtureResumeCount: number;
+  fixtureIsolated: boolean;
+  privacyShieldActive: boolean;
+  mutationScopeLockedToFixture: boolean;
   personalDataMarkersFound: boolean;
   reasons: string[];
   auditedAt: string;
@@ -47,10 +51,14 @@ export function assertLiveAccountMutationAllowed(
     throw new LiveAccountSafetyError(
       audit ?? {
         status: "inconclusive",
+        mode: "fixture-isolation",
         authenticatedAccountConfirmed: false,
-        resumeCount: 0,
+        totalResumeCount: 0,
         fixtureResumeCount: 0,
         nonFixtureResumeCount: 0,
+        fixtureIsolated: false,
+        privacyShieldActive: false,
+        mutationScopeLockedToFixture: false,
         personalDataMarkersFound: false,
         reasons: ["Live account safety audit did not complete."],
         auditedAt: new Date().toISOString(),
@@ -62,10 +70,14 @@ export function assertLiveAccountMutationAllowed(
 export function serializeLiveAccountSafetyAudit(audit: LiveAccountSafetyAudit) {
   return {
     status: audit.status,
+    mode: audit.mode,
     authenticatedAccountConfirmed: audit.authenticatedAccountConfirmed,
-    resumeCount: audit.resumeCount,
+    totalResumeCount: audit.totalResumeCount,
     fixtureResumeCount: audit.fixtureResumeCount,
     nonFixtureResumeCount: audit.nonFixtureResumeCount,
+    fixtureIsolated: audit.fixtureIsolated,
+    privacyShieldActive: audit.privacyShieldActive,
+    mutationScopeLockedToFixture: audit.mutationScopeLockedToFixture,
     personalDataMarkersFound: audit.personalDataMarkersFound,
     reasons: audit.reasons.map((reason) => reason.slice(0, 240)),
     auditedAt: audit.auditedAt,

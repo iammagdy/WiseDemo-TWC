@@ -161,6 +161,7 @@ export type DirectorArtifactKind =
   | "brand-style"
   | "creative-brief"
   | "live-account-safety-audit"
+  | "wiseresume-fixture-reference"
   | "capture-plan"
   | "capture-telemetry"
   | "deterministic-qa"
