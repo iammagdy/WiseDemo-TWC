@@ -239,6 +239,21 @@ function assertBriefEvidence(
   ) {
     throw new Error("Gemini creative output contained prohibited execution data.");
   }
+  const creativeCopy = [
+    brief.hook,
+    brief.corePromise,
+    brief.proofStatement,
+    brief.callToAction,
+    ...brief.captions.map((caption) => caption.text),
+    ...brief.narration.map((line) => line.text),
+  ].join("\n");
+  if (
+    /\b(?:\d+(?:\.\d+)?\s*(?:seconds?|minutes?|hours?|days?|weeks?|months?|%|percent)|(?:boost|increase|improve|raise|double|triple)\s+(?:your\s+)?(?:ats\s+)?(?:score|rate|chances?|results?|conversion)|guarantee(?:d)?|instant(?:ly)?)\b/i.test(
+      creativeCopy,
+    )
+  ) {
+    throw new Error("Gemini creative output contained an unsupported performance claim.");
+  }
   return brief;
 }
 
@@ -281,7 +296,7 @@ export class GeminiCreativeDirector implements CreativeDirectorProvider {
       schema: creativeBriefSchema,
       jsonSchema: creativeBriefJsonSchema,
       systemInstruction:
-        "You are WiseDemo's creative director. Select one evidence-supported public feature, write a concise SaaS advertisement plan, keep capture steps semantic, use fictional data only, and never emit selectors, credentials, code, arbitrary URLs, or destructive operations.",
+        "You are WiseDemo's creative director. Select one evidence-supported public feature, write a concise SaaS advertisement plan, keep capture steps semantic, and use fictional data only. In the hook, core promise, proof statement, call to action, captions, and narration, do not use performance metrics, time savings, time estimates, scores, rates, percentages, guarantees, or instant-result claims. Never emit selectors, credentials, code, arbitrary URLs, or destructive operations.",
       task: `Create a ${input.requestedLanguage} SaaS advertisement brief for ${input.projectName}. Credentials available: ${input.credentialsAvailable ? "yes" : "no"}. User feature brief: ${input.featureBrief?.slice(0, 600) || "none"}. Default capture mode is ${deterministicMode}; choose mobile only with strong public mobile evidence.`,
       untrustedProductData: input.intelligence,
       onProviderEvent: this.options.onProviderEvent,
