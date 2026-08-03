@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   assertSafeWiseResumeOperation,
+  auditWiseResumeFixtureIsolationAccount,
   assertWiseResumeAccountTextSafe,
   assertWiseResumeOperationOrdering,
   assertWiseResumeRequiredEntityCoverage,
@@ -10,9 +11,11 @@ import {
   serializeWiseResumeAdapterArtifact,
   validateWiseResumeFictionalJobPosting,
   validateWiseResumeFictionalResume,
+  wiseResumeAuthoritativeInventoryExpression,
   wiseResumeFixtureInventoryExpression,
   type WiseResumeSmartTailoringPlan,
 } from "./wiseresume.server.ts";
+import { wiseResumeAccountFingerprint } from "../wiseresume-fixture-isolation.server.ts";
 
 const orderedOperations = [
   "ensure-resume",
@@ -89,34 +92,243 @@ test("WiseResume adapter artifacts exclude credentials and preserve only sanitiz
   assert.match(serialized, /abc123/);
 });
 
-test("WiseResume inventory recognizes a settled resume workspace without reading resume content", () => {
+type BrowserResponse = { ok: boolean; status: number; json: () => Promise<unknown> };
+
+function response(status: number, body: unknown): BrowserResponse {
+  return { ok: status >= 200 && status < 300, status, json: async () => body };
+}
+
+async function evaluateAuthoritativeInventory(
+  documentsResponse: BrowserResponse,
+  storedFixtureRecordId: string | null = null,
+) {
+  const requests: Array<{ url: string; init?: RequestInit }> = [];
+  const fetch = async (url: string, init?: RequestInit) => {
+    requests.push({ url, init });
+    return requests.length === 1 ? response(200, { $id: "mock-user" }) : documentsResponse;
+  };
+  const AsyncFunction = Object.getPrototypeOf(async () => undefined).constructor as new (
+    ...args: string[]
+  ) => (...args: unknown[]) => Promise<unknown>;
+  const evaluate = new AsyncFunction(
+    "fetch",
+    "URLSearchParams",
+    `return ${wiseResumeAuthoritativeInventoryExpression(storedFixtureRecordId)};`,
+  );
+  return {
+    evidence: await evaluate(fetch, URLSearchParams),
+    requests,
+  };
+}
+
+test("authoritative Appwrite inventory resolves a successful empty response", async () => {
+  const { evidence, requests } = await evaluateAuthoritativeInventory(
+    response(200, { documents: [] }),
+  );
+  assert.deepEqual(evidence, {
+    source: "appwrite-resumes",
+    sourceAvailable: true,
+    inventoryResolved: true,
+    totalResumeCount: 0,
+    fixtureRecordIds: [],
+    requestStatus: "success",
+  });
+  assert.match(requests[1]!.url, /databases\/main\/collections\/resumes\/documents/);
+  assert.match(decodeURIComponent(requests[1]!.url), /equal\("user_id",\["mock-user"\]\)/);
+  assert.equal(requests[0]!.init?.credentials, "include");
+  assert.equal(requests[1]!.init?.credentials, "include");
+});
+
+test("authoritative Appwrite inventory retains only fixture metadata", async () => {
+  const { evidence } = await evaluateAuthoritativeInventory(
+    response(200, {
+      documents: [
+        {
+          $id: "other-record",
+          title: "Private title",
+          $updatedAt: "2026-08-03",
+          content: "discard",
+        },
+        {
+          $id: "fixture-record",
+          title: "[WiseDemo Fixture] Smart Tailoring Demo",
+          $updatedAt: "2026-08-03",
+          experience: "discard",
+        },
+      ],
+    }),
+  );
+  const serialized = JSON.stringify(evidence);
+  assert.match(serialized, /fixture-record/);
+  assert.doesNotMatch(serialized, /other-record|Private title|content|experience|discard/);
+});
+
+test("authoritative inventory recognizes a stored fixture without exposing other IDs", async () => {
+  const { evidence } = await evaluateAuthoritativeInventory(
+    response(200, {
+      documents: [
+        { $id: "stored-fixture", title: "Fixture renamed", $updatedAt: "2026-08-03" },
+        { $id: "other-record", title: "Private title", $updatedAt: "2026-08-03" },
+      ],
+    }),
+    "stored-fixture",
+  );
+  assert.deepEqual((evidence as { fixtureRecordIds: string[] }).fixtureRecordIds, [
+    "stored-fixture",
+  ]);
+  assert.equal((evidence as { totalResumeCount: number }).totalResumeCount, 2);
+});
+
+test("authoritative inventory reports a missing stored fixture without guessing a replacement", async () => {
+  const { evidence } = await evaluateAuthoritativeInventory(
+    response(200, {
+      documents: [{ $id: "other-record", title: "Private title", $updatedAt: "2026-08-03" }],
+    }),
+    "missing-fixture",
+  );
+  assert.deepEqual((evidence as { fixtureRecordIds: string[] }).fixtureRecordIds, []);
+  assert.equal((evidence as { inventoryResolved: boolean }).inventoryResolved, true);
+});
+
+test("authoritative inventory preserves two exact fixture markers for ambiguity handling", async () => {
+  const { evidence } = await evaluateAuthoritativeInventory(
+    response(200, {
+      documents: [
+        {
+          $id: "fixture-one",
+          title: "[WiseDemo Fixture] Smart Tailoring Demo",
+          $updatedAt: "2026-08-03",
+        },
+        {
+          $id: "fixture-two",
+          title: "[WiseDemo Fixture] Smart Tailoring Demo",
+          $updatedAt: "2026-08-03",
+        },
+      ],
+    }),
+  );
+  assert.equal((evidence as { fixtureRecordIds: string[] }).fixtureRecordIds.length, 2);
+});
+
+test("the audit prefers resolved Appwrite inventory and cannot mutate before its safe result", async () => {
+  const expectedAccountFingerprint = wiseResumeAccountFingerprint("mock-user");
+  const evaluations: string[] = [];
+  const audit = await auditWiseResumeFixtureIsolationAccount(
+    {
+      evaluate: async (expression) => {
+        evaluations.push(expression);
+        if (expression === "location.hostname") return "wiseresume.app";
+        if (expression.includes("liveAccountFingerprint")) {
+          return { sourceAvailable: true, liveAccountFingerprint: expectedAccountFingerprint };
+        }
+        if (expression.includes("wisedemo-privacy-shield")) return true;
+        if (expression.includes("storedFixtureRecordId")) {
+          return {
+            source: "appwrite-resumes",
+            sourceAvailable: true,
+            inventoryResolved: true,
+            totalResumeCount: 2,
+            fixtureRecordIds: [],
+            requestStatus: "success",
+          };
+        }
+        throw new Error("Unexpected browser evaluation.");
+      },
+      delay: async () => undefined,
+      waitUntil: async () => true,
+      goto: async () => undefined,
+    },
+    {
+      expectedAccountFingerprint,
+      legacyExpectedAccountFingerprint: "legacy-not-used",
+      storedFixture: null,
+    },
+  );
+  assert.equal(audit.status, "safe");
+  assert.equal(audit.nonFixtureResumeCount, 2);
+  assert.deepEqual(audit.inventoryEvidenceSources, ["appwrite-resumes-success"]);
+  assert.equal(
+    evaluations.some((expression) => expression.includes("resume-workspace-card")),
+    false,
+  );
+});
+
+for (const [status, label] of [
+  [401, "401"],
+  [403, "403"],
+] as const) {
+  test(`authoritative inventory treats ${label} as inconclusive`, async () => {
+    const { evidence } = await evaluateAuthoritativeInventory(response(status, {}));
+    assert.deepEqual(evidence, {
+      source: "appwrite-resumes",
+      sourceAvailable: false,
+      inventoryResolved: false,
+      totalResumeCount: 0,
+      fixtureRecordIds: [],
+      requestStatus: "forbidden",
+    });
+  });
+}
+
+test("authoritative inventory treats network and invalid responses as inconclusive", async () => {
+  const invalid = await evaluateAuthoritativeInventory(response(200, { unexpected: true }));
+  assert.equal((invalid.evidence as { requestStatus: string }).requestStatus, "invalid");
+  const AsyncFunction = Object.getPrototypeOf(async () => undefined).constructor as new (
+    ...args: string[]
+  ) => (...args: unknown[]) => Promise<unknown>;
+  const evaluate = new AsyncFunction(
+    "fetch",
+    "URLSearchParams",
+    `return ${wiseResumeAuthoritativeInventoryExpression(null)};`,
+  );
+  const unavailable = await evaluate(async () => {
+    throw new Error("offline");
+  }, URLSearchParams);
+  assert.equal((unavailable as { requestStatus: string }).requestStatus, "unavailable");
+});
+
+test("scoped DOM fallback recognizes settled workspace without reading card text", () => {
   const evaluate = new Function(
     "document",
-    "HTMLAnchorElement",
-    "getComputedStyle",
-    "location",
     `return ${wiseResumeFixtureInventoryExpression()};`,
-  ) as (
-    document: {
-      querySelectorAll: () => [];
-      querySelector: (selector: string) => object | null;
-      getElementById: () => null;
-    },
-    anchor: new () => object,
-    getComputedStyle: () => { display: string; visibility: string },
-    location: { href: string },
-  ) => { inventoryResolved: boolean; inventoryEvidenceSources: string[]; totalResumeCount: number };
-  const inventory = evaluate(
-    {
-      querySelectorAll: () => [],
-      querySelector: (selector) => (selector.includes("New Resume") ? {} : null),
-      getElementById: () => null,
-    },
-    class {},
-    () => ({ display: "block", visibility: "visible" }),
-    { href: "https://example.test/dashboard" },
-  );
+  ) as (document: {
+    querySelectorAll: (selector: string) => object[];
+    querySelector: (selector: string) => object | null;
+    getElementById: () => null;
+  }) => {
+    inventoryResolved: boolean;
+    inventoryEvidenceSources: string[];
+    totalResumeCount: number;
+  };
+  const inventory = evaluate({
+    querySelectorAll: (selector) => (selector.includes("resume-workspace") ? [{}, {}] : []),
+    querySelector: (selector) => (selector.includes("resume-workspace-card") ? {} : null),
+    getElementById: () => null,
+  });
   assert.equal(inventory.inventoryResolved, true);
-  assert.deepEqual(inventory.inventoryEvidenceSources, ["create-resume-control"]);
-  assert.equal(inventory.totalResumeCount, 0);
+  assert.deepEqual(inventory.inventoryEvidenceSources, ["resume-workspace-card"]);
+  assert.equal(inventory.totalResumeCount, 2);
+});
+
+test("generic resume selectors cannot resolve the DOM fallback, while the empty state can", () => {
+  const evaluate = new Function(
+    "document",
+    `return ${wiseResumeFixtureInventoryExpression()};`,
+  ) as (document: {
+    querySelectorAll: () => [];
+    querySelector: (selector: string) => object | null;
+    getElementById: () => null;
+  }) => { inventoryResolved: boolean; inventoryEvidenceSources: string[] };
+  const generic = evaluate({
+    querySelectorAll: () => [],
+    querySelector: () => null,
+    getElementById: () => null,
+  });
+  assert.equal(generic.inventoryResolved, false);
+  const empty = evaluate({
+    querySelectorAll: () => [],
+    querySelector: (selector) => (selector.includes("resume-empty-state") ? {} : null),
+    getElementById: () => null,
+  });
+  assert.deepEqual(empty.inventoryEvidenceSources, ["empty-state"]);
 });

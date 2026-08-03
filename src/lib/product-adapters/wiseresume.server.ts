@@ -564,6 +564,18 @@ type WiseResumeFixtureInventoryFacts = {
   privacyShieldActive: boolean;
 };
 
+export type WiseResumeInventoryEvidence = {
+  source: "appwrite-resumes";
+  sourceAvailable: boolean;
+  inventoryResolved: boolean;
+  totalResumeCount: number;
+  fixtureRecordIds: string[];
+  requestStatus: "success" | "unavailable" | "forbidden" | "invalid";
+};
+
+const wiseResumeAppwriteEndpoint = "https://fra.cloud.appwrite.io/v1";
+const wiseResumeAppwriteProjectId = "69fd362b001eb325a192";
+
 export function wiseResumeFixtureRouteExpression(fixtureRecordId: string | null): string {
   return `(() => {
     const expectedId = ${JSON.stringify(fixtureRecordId)};
@@ -650,45 +662,60 @@ function resumeRecordIdFromUrl(value: string): string | null {
   }
 }
 
+export function wiseResumeAuthoritativeInventoryExpression(
+  storedFixtureRecordId: string | null,
+): string {
+  return `(async () => {
+      const fixtureTitle = ${JSON.stringify(WISE_RESUME_FIXTURE_TITLE)};
+      const storedFixtureRecordId = ${JSON.stringify(storedFixtureRecordId)};
+      const unavailable = (requestStatus) => ({ source: "appwrite-resumes", sourceAvailable: false, inventoryResolved: false, totalResumeCount: 0, fixtureRecordIds: [], requestStatus });
+      try {
+        const accountResponse = await fetch(${JSON.stringify(`${wiseResumeAppwriteEndpoint}/account`)}, { credentials: "include", headers: { "X-Appwrite-Project": ${JSON.stringify(wiseResumeAppwriteProjectId)} } });
+        if (accountResponse.status === 401 || accountResponse.status === 403) return unavailable("forbidden");
+        if (!accountResponse.ok) return unavailable("unavailable");
+        let account = await accountResponse.json();
+        const authenticatedUserId = typeof account?.$id === "string" ? account.$id : null;
+        if (!authenticatedUserId) return unavailable("invalid");
+        account = null;
+        const params = new URLSearchParams();
+        params.append("queries[]", 'equal("user_id",[' + JSON.stringify(authenticatedUserId) + '])');
+        params.append("queries[]", 'orderDesc("$updatedAt")');
+        params.append("queries[]", "limit(50)");
+        const inventoryResponse = await fetch(${JSON.stringify(`${wiseResumeAppwriteEndpoint}/databases/main/collections/resumes/documents`)} + "?" + params.toString(), { credentials: "include", headers: { "X-Appwrite-Project": ${JSON.stringify(wiseResumeAppwriteProjectId)} } });
+        if (inventoryResponse.status === 401 || inventoryResponse.status === 403) return unavailable("forbidden");
+        if (!inventoryResponse.ok) return unavailable("unavailable");
+        let payload = await inventoryResponse.json();
+        if (!payload || !Array.isArray(payload.documents)) return unavailable("invalid");
+        const documents = payload.documents;
+        const records = documents.map((document) => ({
+          id: typeof document?.$id === "string" ? document.$id : null,
+          titleMarkerMatch: document?.title === fixtureTitle,
+          updatedAtPresent: typeof document?.$updatedAt === "string" && document.$updatedAt.length > 0,
+        }));
+        payload = null;
+        documents.length = 0;
+        if (records.some((record) => !record.id || !record.updatedAtPresent)) return unavailable("invalid");
+        const fixtureRecordIds = records.filter((record) => record.id === storedFixtureRecordId || record.titleMarkerMatch).map((record) => record.id);
+        return { source: "appwrite-resumes", sourceAvailable: true, inventoryResolved: true, totalResumeCount: records.length, fixtureRecordIds, requestStatus: "success" };
+      } catch { return unavailable("unavailable"); }
+    })()`;
+}
+
 export function wiseResumeFixtureInventoryExpression(): string {
   return `(() => {
-      const fixtureTitle = ${JSON.stringify(WISE_RESUME_FIXTURE_TITLE)};
-      const visible = (element) => { const rect = element.getBoundingClientRect(); const style = getComputedStyle(element); return rect.width > 4 && rect.height > 4 && style.display !== "none" && style.visibility !== "hidden"; };
-      const recordId = (element) => {
-        for (const attribute of ["data-resume-id", "data-record-id", "data-id", "data-document-id"]) {
-          const value = element.getAttribute(attribute);
-          if (value) return value;
-        }
-        const href = element instanceof HTMLAnchorElement ? element.href : element.getAttribute("href");
-        if (!href) return null;
-        try {
-          const url = new URL(href, location.href);
-          return url.searchParams.get("resumeId") || url.searchParams.get("resume_id") || (url.pathname.split("/").filter(Boolean).at(-1) || null);
-        } catch { return null; }
-      };
-      const records = new Map();
-      for (const element of Array.from(document.querySelectorAll("[data-resume-id], [data-record-id], [data-document-id], a[href*='resume']"))) {
-        const id = recordId(element);
-        if (!id || /^(resume|resumes|editor|edit|new)$/i.test(id)) continue;
-        const current = records.get(id) || { fixture: false };
-        const marker = element.getAttribute("data-wisedemo-fixture") === "smart-tailoring" || String(element.textContent || "").includes(fixtureTitle);
-        records.set(id, { fixture: current.fixture || marker });
-      }
       const inventoryEvidence = {
-        resumeWorkspaceRoute: /^\\/(?:dashboard|resumes?)(?:\\/|$)/i.test(location.pathname),
-        resumeListContainer: Boolean(document.querySelector("[data-resume-list], [data-testid*=resume], [class*=resume]")),
-        emptyStateControl: Boolean(document.querySelector("[data-testid*=empty]")),
-        createResumeControl: Boolean(document.querySelector("[aria-label='New Resume'], [aria-label*='Create resume'], [aria-label*='Add resume']")),
-        resumeSearchControl: Boolean(document.querySelector("[aria-label*='Search resumes']")),
+        resumeWorkspaceRow: Boolean(document.querySelector(".resume-workspace-row")),
+        resumeWorkspaceCard: Boolean(document.querySelector(".resume-workspace-card")),
+        createResumeControl: Boolean(document.querySelector("[aria-label='Create Resume'], [data-testid='create-resume']")),
+        emptyState: Boolean(document.querySelector("[data-testid='resume-empty-state'], .resume-workspace-empty")),
       };
       const inventoryEvidenceSources = Object.entries(inventoryEvidence).filter(([, active]) => active).map(([source]) => source.replace(/[A-Z]/g, (letter) => "-" + letter.toLowerCase()));
-      const inventoryResolved = records.size > 0 || inventoryEvidenceSources.length > 0;
       return {
         authenticatedAccountConfirmed: false,
-        inventoryResolved,
+        inventoryResolved: inventoryEvidenceSources.length > 0,
         inventoryEvidenceSources,
-        totalResumeCount: records.size,
-        fixtureRecordIds: Array.from(records.entries()).filter(([, value]) => value.fixture).map(([id]) => id),
+        totalResumeCount: document.querySelectorAll(".resume-workspace-row, .resume-workspace-card").length,
+        fixtureRecordIds: [],
         privacyShieldActive: Boolean(document.getElementById("wisedemo-privacy-shield")),
       };
     })()`;
@@ -696,30 +723,47 @@ export function wiseResumeFixtureInventoryExpression(): string {
 
 async function readWiseResumeFixtureInventory(
   context: ProductLocaleAdapterContext,
+  storedFixtureRecordId: string | null,
 ): Promise<WiseResumeFixtureInventoryFacts> {
+  const authoritative = asRecord(
+    await context.evaluate(wiseResumeAuthoritativeInventoryExpression(storedFixtureRecordId)),
+  );
+  const requestStatus = asString(authoritative?.requestStatus);
+  if (authoritative?.source === "appwrite-resumes" && requestStatus !== "unavailable") {
+    return {
+      authenticatedAccountConfirmed: false,
+      inventoryResolved: authoritative.inventoryResolved === true,
+      inventoryEvidenceSources: [`appwrite-resumes-${requestStatus ?? "invalid"}`],
+      totalResumeCount:
+        typeof authoritative.totalResumeCount === "number" ? authoritative.totalResumeCount : 0,
+      fixtureRecordIds: Array.isArray(authoritative.fixtureRecordIds)
+        ? authoritative.fixtureRecordIds.filter(
+            (value): value is string => typeof value === "string",
+          )
+        : [],
+      privacyShieldActive:
+        (await context.evaluate('Boolean(document.getElementById("wisedemo-privacy-shield"))')) ===
+        true,
+    };
+  }
   const facts = asRecord(await context.evaluate(wiseResumeFixtureInventoryExpression()));
   return {
     authenticatedAccountConfirmed: facts?.authenticatedAccountConfirmed === true,
     inventoryResolved: facts?.inventoryResolved === true,
-    inventoryEvidenceSources: Array.isArray(facts?.inventoryEvidenceSources)
-      ? facts.inventoryEvidenceSources.filter((value): value is string =>
-          /^[a-z-]{1,64}$/.test(value),
-        )
-      : [],
+    inventoryEvidenceSources: [
+      "appwrite-resumes-unavailable",
+      ...(Array.isArray(facts?.inventoryEvidenceSources)
+        ? facts.inventoryEvidenceSources.filter((value): value is string =>
+            /^[a-z-]{1,64}$/.test(value),
+          )
+        : []),
+    ],
     totalResumeCount: typeof facts?.totalResumeCount === "number" ? facts.totalResumeCount : 0,
     fixtureRecordIds: Array.isArray(facts?.fixtureRecordIds)
       ? facts.fixtureRecordIds.filter((value): value is string => typeof value === "string")
       : [],
     privacyShieldActive: facts?.privacyShieldActive === true,
   };
-}
-
-async function waitForWiseResumeFixtureInventoryReadiness(
-  context: ProductLocaleAdapterContext,
-): Promise<void> {
-  await context
-    .waitUntil(`(${wiseResumeFixtureInventoryExpression()}).inventoryResolved === true`, 15_000)
-    .catch(() => false);
 }
 
 async function readWiseResumeAuthenticatedIdentity(
@@ -846,8 +890,10 @@ export async function auditWiseResumeFixtureIsolationAccount(
       reasons: [reason],
     };
   }
-  await waitForWiseResumeFixtureInventoryReadiness(context);
-  const facts = await readWiseResumeFixtureInventory(context);
+  const facts = await readWiseResumeFixtureInventory(
+    context,
+    input.storedFixture?.resumeRecordId ?? null,
+  );
   const audit = createWiseResumeFixtureIsolationAudit({
     ...facts,
     authenticatedAccountConfirmed: identity.authenticatedAccountConfirmed,
