@@ -977,6 +977,23 @@ export const captureDirectedDemo = createServerFn({ method: "POST" })
       await context.repository.createDirectorArtifact({
         project_id: project.id,
         demo_id: demo.id,
+        artifact_kind: "wiseresume-dashboard-workspace",
+        cache_key: boundedArtifactCacheKey(
+          briefArtifact.cache_key,
+          "wiseresume-dashboard-workspace",
+        ),
+        status: "ready",
+        payload_json: preflight.adapterPlan.createControlEvidence as Json,
+        expires_at: null,
+        provider: "wisedemo",
+        model: null,
+        duration_ms: null,
+        revision: 0,
+        failure_reason: null,
+      });
+      await context.repository.createDirectorArtifact({
+        project_id: project.id,
+        demo_id: demo.id,
         artifact_kind: "wiseresume-fixture-reference",
         cache_key: boundedArtifactCacheKey(briefArtifact.cache_key, "wiseresume-fixture"),
         status: "ready",

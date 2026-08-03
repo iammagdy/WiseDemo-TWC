@@ -54,6 +54,16 @@ export type WiseResumeSmartTailoringPlan = {
     privateDataDetected: boolean;
   };
   finalActions: CdpAction[];
+  createControlEvidence?: WiseResumeCreateControlEvidence;
+};
+
+export type WiseResumeCreateControlEvidence = {
+  routeCategory: "resume-dashboard" | "login" | "onboarding" | "unrelated" | "unknown";
+  workspaceConfirmed: boolean;
+  candidateCount: number;
+  selectorCategory: "data-testid" | "aria-label" | "exact-role-label" | "none";
+  controlVisible: boolean;
+  controlEnabled: boolean;
 };
 
 export type WiseResumeTransformationEvidence = {
@@ -554,6 +564,7 @@ export function serializeWiseResumeAdapterArtifact(plan: WiseResumeSmartTailorin
     tailoringActionSelector: plan.tailoringActionSelector,
     beforeEvidence: plan.beforeEvidence,
     finalActionTypes: plan.finalActions.map((action) => action.type),
+    createControlEvidence: plan.createControlEvidence ?? null,
   };
 }
 
@@ -588,8 +599,6 @@ export type WiseResumeInventoryEvidence = {
 export function wiseResumeFixtureRouteExpression(fixtureRecordId: string | null): string {
   return `(() => {
     const expectedId = ${JSON.stringify(fixtureRecordId)};
-    const fixtureTitle = ${JSON.stringify(WISE_RESUME_FIXTURE_TITLE)};
-    const elementText = (element) => String(element.textContent || "");
     const cssPath = (element) => element.id ? "#" + CSS.escape(element.id) : element.getAttribute("data-testid") ? '[data-testid="' + element.getAttribute("data-testid").replace(/"/g, "") + '"]' : element.tagName.toLowerCase() + ":nth-of-type(" + (Array.from(element.parentElement?.children || []).filter((child) => child.tagName === element.tagName).indexOf(element) + 1) + ")";
     const recordId = (element) => {
       for (const attribute of ["data-resume-id", "data-record-id", "data-id", "data-document-id"]) { const value = element.getAttribute(attribute); if (value) return value; }
@@ -598,16 +607,43 @@ export function wiseResumeFixtureRouteExpression(fixtureRecordId: string | null)
       try { const url = new URL(href, location.href); return url.searchParams.get("resumeId") || url.searchParams.get("resume_id") || (url.pathname.split("/").filter(Boolean).at(-1) || null); } catch { return null; }
     };
     const entries = Array.from(document.querySelectorAll("[data-resume-id], [data-record-id], [data-document-id], a[href*='resume']")).map((element) => ({ element, id: recordId(element) })).filter((entry) => entry.id && !/^(resume|resumes|editor|edit|new)$/i.test(entry.id));
-    const fixtureEntry = expectedId ? entries.find((entry) => entry.id === expectedId) : entries.find((entry) => elementText(entry.element).includes(fixtureTitle));
+    const fixtureEntry = expectedId ? entries.find((entry) => entry.id === expectedId) : null;
     const href = fixtureEntry?.element instanceof HTMLAnchorElement ? fixtureEntry.element.href : fixtureEntry?.element.getAttribute("href");
-    const controls = Array.from(document.querySelectorAll("button, a[href], [role=button]"));
-    const create = controls.find((element) => /create.*resume|new.*resume|add.*resume/i.test(elementText(element) + " " + String(element.getAttribute("aria-label") || ""))) || document.querySelector("[aria-label='New Resume'], [aria-label='Create Resume'], [data-testid='create-resume']");
+    const expectedOrigin = "https://wiseresume.app";
+    const path = location.pathname.replace(/\\/+$/, "") || "/";
+    const routeCategory = location.origin !== expectedOrigin ? "unrelated" : /(?:login|sign-in|auth)/i.test(path) ? "login" : /(?:onboarding|template|profile)/i.test(path) ? "onboarding" : path === "/dashboard" ? "resume-dashboard" : path ? "unrelated" : "unknown";
+    const visible = (element) => { const rect = element.getBoundingClientRect(); const style = getComputedStyle(element); return rect.width > 4 && rect.height > 4 && style.display !== "none" && style.visibility !== "hidden"; };
+    const workspaceDefinitions = [
+      '[data-testid="resume-workspace-toolbar"]',
+      '[data-testid="resume-workspace"]',
+      '[aria-label="Resume workspace toolbar"]',
+      '[aria-label="Resume workspace"]',
+    ];
+    const workspaceDefinition = workspaceDefinitions.find((selector) => { const element = document.querySelector(selector); return element && visible(element); }) || null;
+    const workspace = workspaceDefinition ? document.querySelector(workspaceDefinition) : null;
+    const workspaceConfirmed = routeCategory === "resume-dashboard" && Boolean(workspace);
+    const controlDefinitions = [
+      { selector: '[data-testid="create-resume"]', category: "data-testid" },
+      { selector: '[data-testid="new-resume"]', category: "data-testid" },
+      { selector: '[aria-label="Create Resume"]', category: "aria-label" },
+      { selector: '[aria-label="New Resume"]', category: "aria-label" },
+      { selector: 'button[role="button"]', category: "exact-role-label" },
+      { selector: "button", category: "exact-role-label" },
+    ];
+    const candidates = workspace ? controlDefinitions.flatMap((definition) => Array.from(workspace.querySelectorAll(definition.selector)).filter((element) => definition.category !== "exact-role-label" || String(element.textContent || "").replace(/\\s+/g, " ").trim() === "Create Resume").map((element) => ({ element, definition }))) : [];
+    const uniqueCandidates = candidates.filter((candidate, index) => candidates.findIndex((other) => other.element === candidate.element) === index);
+    const candidate = uniqueCandidates.length === 1 ? uniqueCandidates[0] : null;
+    const controlVisible = Boolean(candidate && visible(candidate.element));
+    const controlEnabled = Boolean(candidate && !(candidate.element instanceof HTMLButtonElement && candidate.element.disabled) && candidate.element.getAttribute("aria-disabled") !== "true");
+    const selectorCategory = candidate && controlVisible && controlEnabled ? candidate.definition.category : "none";
+    const createSelector = candidate && selectorCategory !== "none" ? workspaceDefinition + " " + candidate.definition.selector : null;
     return {
       origin: location.origin,
       resumeUrl: href || null,
       recordId: fixtureEntry?.id || null,
       fixtureSelector: fixtureEntry ? cssPath(fixtureEntry.element) : null,
-      createSelector: create ? cssPath(create) : null,
+      createSelector,
+      createControlEvidence: { routeCategory, workspaceConfirmed, candidateCount: uniqueCandidates.length, selectorCategory, controlVisible, controlEnabled },
     };
   })()`;
 }
@@ -1036,9 +1072,14 @@ async function gotoWiseResumeFixtureWithShield(input: {
   checkpointBefore: string;
   checkpointAfter: string;
   assertPrivacyShield: ((checkpoint: string) => Promise<void>) | undefined;
+  settleExpression?: string;
+  settleError?: string;
 }): Promise<void> {
   await input.assertPrivacyShield?.(input.checkpointBefore);
   await input.context.goto(input.url, input.waitMs);
+  if (input.settleExpression && !(await input.context.waitUntil(input.settleExpression, 12_000))) {
+    throw new Error(input.settleError ?? "WiseResume navigation did not settle.");
+  }
   await input.assertPrivacyShield?.(input.checkpointAfter);
 }
 
@@ -1088,6 +1129,7 @@ async function resolveWiseResumeFixtureRoute(
   recordId: string | null;
   fixtureSelector: string | null;
   createSelector: string | null;
+  createControlEvidence: WiseResumeCreateControlEvidence;
 }> {
   const route = asRecord(
     await context.evaluate(wiseResumeFixtureRouteExpression(fixture?.resumeRecordId ?? null)),
@@ -1098,7 +1140,103 @@ async function resolveWiseResumeFixtureRoute(
     recordId: asString(route?.recordId),
     fixtureSelector: asString(route?.fixtureSelector),
     createSelector: asString(route?.createSelector),
+    createControlEvidence: readWiseResumeCreateControlEvidence(route?.createControlEvidence),
   };
+}
+
+function readWiseResumeCreateControlEvidence(value: unknown): WiseResumeCreateControlEvidence {
+  const evidence = asRecord(value);
+  const routeCategory = asString(evidence?.routeCategory);
+  const selectorCategory = asString(evidence?.selectorCategory);
+  return {
+    routeCategory:
+      routeCategory === "resume-dashboard" ||
+      routeCategory === "login" ||
+      routeCategory === "onboarding" ||
+      routeCategory === "unrelated" ||
+      routeCategory === "unknown"
+        ? routeCategory
+        : "unknown",
+    workspaceConfirmed: evidence?.workspaceConfirmed === true,
+    candidateCount:
+      typeof evidence?.candidateCount === "number" &&
+      Number.isInteger(evidence.candidateCount) &&
+      evidence.candidateCount >= 0
+        ? evidence.candidateCount
+        : 0,
+    selectorCategory:
+      selectorCategory === "data-testid" ||
+      selectorCategory === "aria-label" ||
+      selectorCategory === "exact-role-label" ||
+      selectorCategory === "none"
+        ? selectorCategory
+        : "none",
+    controlVisible: evidence?.controlVisible === true,
+    controlEnabled: evidence?.controlEnabled === true,
+  };
+}
+
+function assertWiseResumeVerifiedDashboardWorkspace(input: {
+  route: Awaited<ReturnType<typeof resolveWiseResumeFixtureRoute>>;
+  audit: LiveAccountSafetyAudit | undefined;
+}): void {
+  const evidence = input.route.createControlEvidence;
+  const inventory = input.audit?.inventoryRequestEvidence;
+  if (
+    input.route.origin !== "https://wiseresume.app" ||
+    evidence.routeCategory !== "resume-dashboard" ||
+    !evidence.workspaceConfirmed ||
+    input.audit?.authenticatedAccountConfirmed !== true ||
+    input.audit?.privacyShieldActive !== true ||
+    inventory?.inventoryResolved !== true ||
+    inventory.countEstablished !== true
+  ) {
+    throw new Error(
+      `WiseResume dashboard workspace verification failed: ${evidence.routeCategory}.`,
+    );
+  }
+}
+
+export async function resolveWiseResumeFixtureCreationWorkspace(
+  context: ProductLocaleAdapterContext,
+  input: {
+    liveAccountSafetyAudit: LiveAccountSafetyAudit | undefined;
+    storedFixture: WiseResumeFixtureReference | null;
+    assertPrivacyShield?: (checkpoint: string) => Promise<void>;
+  },
+) {
+  let route = await resolveWiseResumeFixtureRoute(context, input.storedFixture);
+  if (input.storedFixture) return route;
+
+  assertWiseResumeFixtureCreationAllowed(input.liveAccountSafetyAudit);
+  const evidence = route.createControlEvidence;
+  const needsDashboardNavigation =
+    evidence.routeCategory !== "resume-dashboard" || !evidence.workspaceConfirmed;
+  if (needsDashboardNavigation) {
+    await gotoWiseResumeFixtureWithShield({
+      context,
+      url: "https://wiseresume.app/dashboard",
+      waitMs: 1_200,
+      checkpointBefore: "before-fixture-dashboard-navigation",
+      checkpointAfter: "after-fixture-dashboard-navigation",
+      assertPrivacyShield: input.assertPrivacyShield,
+      settleExpression:
+        'document.readyState === "interactive" || document.readyState === "complete"',
+      settleError: "WiseResume dashboard did not settle after navigation.",
+    });
+    route = await resolveWiseResumeFixtureRoute(context, null);
+  }
+
+  assertWiseResumeVerifiedDashboardWorkspace({ route, audit: input.liveAccountSafetyAudit });
+  if (
+    !route.createSelector ||
+    route.createControlEvidence.candidateCount !== 1 ||
+    !route.createControlEvidence.controlVisible ||
+    !route.createControlEvidence.controlEnabled
+  ) {
+    throw new Error("WiseResume fixture creation control could not be resolved.");
+  }
+  return route;
 }
 
 async function createWiseResumeFixture(
@@ -1177,21 +1315,13 @@ export async function prepareWiseResumeFixtureSmartTailoring(
     throw new Error("WiseResume adapter received a non-WiseResume page.");
   const { resume, jobPosting } = createWiseResumeFictionalState();
   let fixture = input.storedFixture;
-  let route = await resolveWiseResumeFixtureRoute(context, fixture);
-  if (!fixture && !route.createSelector) {
-    await gotoWiseResumeFixtureWithShield({
-      context,
-      url: "https://wiseresume.app/dashboard",
-      waitMs: 1_200,
-      checkpointBefore: "before-fixture-dashboard-navigation",
-      checkpointAfter: "after-fixture-dashboard-navigation",
-      assertPrivacyShield: input.assertPrivacyShield,
-    });
-    route = await resolveWiseResumeFixtureRoute(context, null);
-  }
+  let route = await resolveWiseResumeFixtureCreationWorkspace(context, {
+    liveAccountSafetyAudit: input.liveAccountSafetyAudit,
+    storedFixture: fixture,
+    assertPrivacyShield: input.assertPrivacyShield,
+  });
   let resumeUrl = route.resumeUrl;
   if (!fixture) {
-    assertWiseResumeFixtureCreationAllowed(input.liveAccountSafetyAudit);
     if (route.recordId && route.resumeUrl) {
       fixture = createWiseResumeFixtureReference({
         accountFingerprint: input.accountFingerprint,
@@ -1354,6 +1484,7 @@ export async function prepareWiseResumeFixtureSmartTailoring(
         expected: { selector: "textarea, [contenteditable=true], [data-testid*=resume]" },
       },
     ],
+    createControlEvidence: route.createControlEvidence,
     fixture: { ...fixture, lastValidatedAt: new Date().toISOString() },
     finalVisibleSafety,
   };

@@ -92,9 +92,18 @@ test("WiseResume adapter artifacts exclude credentials and preserve only sanitiz
       privateDataDetected: false,
     },
     finalActions: [{ type: "click", selector: "button:nth-of-type(2)" }],
+    createControlEvidence: {
+      routeCategory: "resume-dashboard",
+      workspaceConfirmed: true,
+      candidateCount: 1,
+      selectorCategory: "aria-label",
+      controlVisible: true,
+      controlEnabled: true,
+    },
   };
   const serialized = JSON.stringify(serializeWiseResumeAdapterArtifact(plan));
   assert.doesNotMatch(serialized, /username|password|secret|credential/i);
+  assert.doesNotMatch(serialized, /aria-label=|New Resume|data-testid=/);
   assert.match(serialized, /abc123/);
 });
 

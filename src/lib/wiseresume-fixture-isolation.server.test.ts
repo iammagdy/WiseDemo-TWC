@@ -15,9 +15,12 @@ import {
 import {
   evaluateWiseResumeFixtureViewportSafety,
   prepareWiseResumeFixtureSmartTailoring,
+  resolveWiseResumeFixtureCreationWorkspace,
+  type ProductLocaleAdapterContext,
   wiseResumeFixtureRouteExpression,
   wiseResumeFixtureWriteExpression,
 } from "./product-adapters/wiseresume.server.ts";
+import type { LiveAccountSafetyAudit } from "./live-account-safety.server.ts";
 import { wiseResumeLegacyAccountFingerprint } from "./wiseresume-account-fingerprint.server.ts";
 
 const accountFingerprint = wiseResumeAccountFingerprint("demo-user@test.example");
@@ -151,19 +154,270 @@ test("fixture route expression declares each helper before it is used", () => {
   const expression = wiseResumeFixtureRouteExpression("fixture-resume-1");
   assert.doesNotThrow(() => new Function(expression));
   assert.ok(
-    expression.indexOf("const elementText") < expression.indexOf("elementText(entry.element)"),
+    expression.indexOf("const cssPath") < expression.indexOf("cssPath(fixtureEntry.element)"),
   );
-  assert.ok(expression.indexOf("const cssPath") < expression.indexOf("cssPath(create)"));
   assert.match(expression, /fixtureSelector/);
-  assert.match(expression, /aria-label='New Resume'/);
+  assert.match(expression, /aria-label="New Resume"/);
+  assert.match(expression, /workspaceDefinitions/);
   assert.doesNotMatch(expression, /username|password|credential|secret/i);
 });
 
-test("fixture preparation uses the verified dashboard only when a creation control is absent", () => {
+test("fixture preparation retains a supplemental dashboard wiring check", () => {
   const source = String(prepareWiseResumeFixtureSmartTailoring);
-  assert.match(source, /https:\/\/wiseresume\.app\/dashboard/);
-  assert.match(source, /before-fixture-dashboard-navigation/);
-  assert.match(source, /after-fixture-dashboard-navigation/);
+  assert.match(source, /resolveWiseResumeFixtureCreationWorkspace/);
+});
+
+const safeAudit: LiveAccountSafetyAudit = {
+  status: "safe",
+  mode: "empty-account",
+  authenticatedAccountConfirmed: true,
+  inventoryRequestEvidence: {
+    source: "appwrite-resumes",
+    sourceAvailable: true,
+    inventoryResolved: true,
+    countEstablished: true,
+    requestStatus: "success",
+    httpStatusClass: "2xx",
+    domFallbackResolved: false,
+  },
+  totalResumeCount: 0,
+  fixtureResumeCount: 0,
+  nonFixtureResumeCount: 0,
+  fixtureIsolated: true,
+  privacyShieldActive: true,
+  mutationScopeLockedToFixture: false,
+  personalDataMarkersFound: false,
+  reasons: [],
+  auditedAt: "2026-08-03T00:00:00.000Z",
+};
+
+type RouteResult = {
+  origin: string;
+  resumeUrl: string | null;
+  recordId: string | null;
+  fixtureSelector: string | null;
+  createSelector: string | null;
+  createControlEvidence: {
+    routeCategory: "resume-dashboard" | "login" | "onboarding" | "unrelated" | "unknown";
+    workspaceConfirmed: boolean;
+    candidateCount: number;
+    selectorCategory: "data-testid" | "aria-label" | "exact-role-label" | "none";
+    controlVisible: boolean;
+    controlEnabled: boolean;
+  };
+};
+
+function routeResult(
+  input: Partial<RouteResult["createControlEvidence"]> & {
+    routeCategory?: RouteResult["createControlEvidence"]["routeCategory"];
+    createSelector?: string | null;
+  } = {},
+): RouteResult {
+  return {
+    origin: "https://wiseresume.app",
+    resumeUrl: null,
+    recordId: null,
+    fixtureSelector: null,
+    createSelector: input.createSelector ?? null,
+    createControlEvidence: {
+      routeCategory: input.routeCategory ?? "resume-dashboard",
+      workspaceConfirmed: input.workspaceConfirmed ?? true,
+      candidateCount: input.candidateCount ?? (input.createSelector ? 1 : 0),
+      selectorCategory: input.selectorCategory ?? (input.createSelector ? "aria-label" : "none"),
+      controlVisible: input.controlVisible ?? Boolean(input.createSelector),
+      controlEnabled: input.controlEnabled ?? Boolean(input.createSelector),
+    },
+  };
+}
+
+function mockedWorkspaceContext(input: {
+  routes: RouteResult[];
+  events: string[];
+  clickResult?: boolean;
+  createTransition?: boolean;
+}): ProductLocaleAdapterContext {
+  let routeIndex = 0;
+  let creationClicked = false;
+  return {
+    evaluate: async (expression) => {
+      if (expression === "location.hostname") return "wiseresume.app";
+      if (expression.includes("workspaceDefinitions")) {
+        input.events.push(`route:${routeIndex}`);
+        return input.routes[Math.min(routeIndex++, input.routes.length - 1)];
+      }
+      if (expression === "location.href")
+        return creationClicked
+          ? "https://wiseresume.app/resume/new"
+          : "https://wiseresume.app/dashboard";
+      if (expression.includes("target.click")) {
+        input.events.push(`click:${expression.includes('[aria-label=\\"New Resume\\"]')}`);
+        creationClicked = true;
+        return input.clickResult ?? true;
+      }
+      throw new Error("unexpected browser evaluation");
+    },
+    delay: async () => undefined,
+    waitUntil: async (expression) => {
+      input.events.push(expression.includes("document.readyState") ? "settled" : "transition");
+      return input.createTransition ?? true;
+    },
+    goto: async (url) => {
+      input.events.push(`goto:${url}`);
+    },
+  };
+}
+
+test("dashboard fallback is behavioral, shielded, settled, and clicks only its unique narrow control", async () => {
+  const events: string[] = [];
+  const context = mockedWorkspaceContext({
+    events,
+    routes: [
+      routeResult({ routeCategory: "unrelated" }),
+      routeResult({
+        createSelector: '[data-testid="resume-workspace-toolbar"] [aria-label="New Resume"]',
+      }),
+    ],
+  });
+  const checkpoints: string[] = [];
+  const shield = async (checkpoint: string) => {
+    checkpoints.push(checkpoint);
+    events.push(`shield:${checkpoint}`);
+  };
+
+  const route = await resolveWiseResumeFixtureCreationWorkspace(context, {
+    liveAccountSafetyAudit: safeAudit,
+    storedFixture: null,
+    assertPrivacyShield: shield,
+  });
+  assert.equal(
+    route.createSelector,
+    '[data-testid="resume-workspace-toolbar"] [aria-label="New Resume"]',
+  );
+  assert.deepEqual(checkpoints, [
+    "before-fixture-dashboard-navigation",
+    "after-fixture-dashboard-navigation",
+  ]);
+  assert.deepEqual(events, [
+    "route:0",
+    "shield:before-fixture-dashboard-navigation",
+    "goto:https://wiseresume.app/dashboard",
+    "settled",
+    "shield:after-fixture-dashboard-navigation",
+    "route:1",
+  ]);
+  assert.doesNotMatch(
+    JSON.stringify(route.createControlEvidence),
+    /New Resume|resume-workspace-toolbar/,
+  );
+});
+
+test("fixture preparation clicks the unique dashboard control and no other control before mutation", async () => {
+  const events: string[] = [];
+  const context = mockedWorkspaceContext({
+    events,
+    routes: [
+      routeResult({ routeCategory: "unrelated" }),
+      routeResult({
+        createSelector: '[data-testid="resume-workspace-toolbar"] [aria-label="New Resume"]',
+      }),
+    ],
+  });
+  await assert.rejects(
+    prepareWiseResumeFixtureSmartTailoring(context, {
+      liveAccountSafetyAudit: safeAudit,
+      storedFixture: null,
+      accountFingerprint,
+      assertPrivacyShield: async () => undefined,
+    }),
+    /WiseResume fixture creation did not provide a scoped record ID/,
+  );
+  assert.deepEqual(
+    events.filter((event) => event.startsWith("click:")),
+    ["click:true"],
+  );
+  assert.equal(events.filter((event) => event.startsWith("goto:")).length, 1);
+});
+
+test("valid dashboard control and stored fixture avoid creation-workspace navigation", async () => {
+  const directEvents: string[] = [];
+  await resolveWiseResumeFixtureCreationWorkspace(
+    mockedWorkspaceContext({
+      events: directEvents,
+      routes: [
+        routeResult({
+          createSelector: '[data-testid="resume-workspace-toolbar"] [aria-label="New Resume"]',
+        }),
+      ],
+    }),
+    { liveAccountSafetyAudit: safeAudit, storedFixture: null },
+  );
+  assert.deepEqual(directEvents, ["route:0"]);
+
+  const storedEvents: string[] = [];
+  await resolveWiseResumeFixtureCreationWorkspace(
+    mockedWorkspaceContext({ events: storedEvents, routes: [routeResult()] }),
+    { liveAccountSafetyAudit: safeAudit, storedFixture: fixture },
+  );
+  assert.deepEqual(storedEvents, ["route:0"]);
+});
+
+for (const [name, finalRoute] of [
+  ["login redirect", routeResult({ routeCategory: "login" })],
+  ["onboarding redirect", routeResult({ routeCategory: "onboarding" })],
+  ["unrelated redirect", routeResult({ routeCategory: "unrelated" })],
+  ["no dashboard control", routeResult()],
+  ["ambiguous controls", routeResult({ candidateCount: 2 })],
+  ["hidden control", routeResult({ candidateCount: 1, controlVisible: false })],
+  [
+    "disabled control",
+    routeResult({ candidateCount: 1, controlVisible: true, controlEnabled: false }),
+  ],
+] as const) {
+  test(`dashboard ${name} aborts before a fixture click or mutation`, async () => {
+    const events: string[] = [];
+    await assert.rejects(
+      resolveWiseResumeFixtureCreationWorkspace(
+        mockedWorkspaceContext({
+          events,
+          routes: [routeResult({ routeCategory: "unrelated" }), finalRoute],
+        }),
+        { liveAccountSafetyAudit: safeAudit, storedFixture: null },
+      ),
+    );
+    assert.equal(
+      events.some((event) => event.startsWith("click:")),
+      false,
+    );
+    assert.equal(events.filter((event) => event.startsWith("goto:")).length, 1);
+  });
+}
+
+test("a failed post-navigation privacy shield aborts without retry or mutation", async () => {
+  const events: string[] = [];
+  await assert.rejects(
+    resolveWiseResumeFixtureCreationWorkspace(
+      mockedWorkspaceContext({
+        events,
+        routes: [routeResult({ routeCategory: "unrelated" }), routeResult()],
+      }),
+      {
+        liveAccountSafetyAudit: safeAudit,
+        storedFixture: null,
+        assertPrivacyShield: async (checkpoint) => {
+          events.push(`shield:${checkpoint}`);
+          if (checkpoint === "after-fixture-dashboard-navigation")
+            throw new Error("shield restoration failed");
+        },
+      },
+    ),
+    /shield restoration failed/,
+  );
+  assert.equal(events.filter((event) => event.startsWith("goto:")).length, 1);
+  assert.equal(
+    events.some((event) => event.startsWith("click:")),
+    false,
+  );
+  assert.doesNotMatch(String(resolveWiseResumeFixtureCreationWorkspace), /Steel|session/i);
 });
 
 test("fixture write expression writes a stable WiseDemo marker without account-wide fields", () => {
