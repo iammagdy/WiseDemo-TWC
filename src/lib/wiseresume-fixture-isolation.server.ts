@@ -2,10 +2,18 @@ import {
   assertLiveAccountMutationAllowed,
   type LiveAccountSafetyAudit,
 } from "./live-account-safety.server.ts";
+import {
+  wiseResumeAccountFingerprint,
+  wiseResumeAccountFingerprintFormat,
+  type WiseResumeAccountFingerprintFormat,
+} from "./wiseresume-account-fingerprint.server.ts";
+
+export { wiseResumeAccountFingerprint } from "./wiseresume-account-fingerprint.server.ts";
 
 export type WiseResumeFixtureReference = {
   version: 1;
   accountFingerprint: string;
+  accountFingerprintFormat: WiseResumeAccountFingerprintFormat;
   resumeRecordId: string;
   fixtureKind: "smart-tailoring";
   fixtureSignature: string;
@@ -42,10 +50,6 @@ function fingerprint(value: string, prefix: string): string {
   return `${prefix}-${(hash >>> 0).toString(16)}`;
 }
 
-export function wiseResumeAccountFingerprint(identifier: string): string {
-  return fingerprint(identifier, "wr-account");
-}
-
 export function wiseResumeFixtureSignature(resumeRecordId: string): string {
   return `${WISE_RESUME_FIXTURE_SIGNATURE}-${fingerprint(resumeRecordId, "record")}`;
 }
@@ -56,11 +60,15 @@ export function createWiseResumeFixtureReference(input: {
   createdByWiseDemo: boolean;
   lastValidatedAt?: string;
 }): WiseResumeFixtureReference {
-  if (!input.accountFingerprint || !input.resumeRecordId)
+  if (
+    wiseResumeAccountFingerprintFormat(input.accountFingerprint) !== "canonical-v1" ||
+    !input.resumeRecordId
+  )
     throw new Error("WiseResume fixture identity requires an account fingerprint and record ID.");
   return {
     version: 1,
     accountFingerprint: input.accountFingerprint,
+    accountFingerprintFormat: "canonical-v1",
     resumeRecordId: input.resumeRecordId,
     fixtureKind: "smart-tailoring",
     fixtureSignature: wiseResumeFixtureSignature(input.resumeRecordId),
@@ -83,9 +91,11 @@ export function parseWiseResumeFixtureReference(value: unknown): WiseResumeFixtu
   ) {
     return null;
   }
-  const reference = record as unknown as WiseResumeFixtureReference;
+  const fingerprintFormat = wiseResumeAccountFingerprintFormat(record.accountFingerprint);
+  if (!fingerprintFormat) return null;
+  const reference = record as Omit<WiseResumeFixtureReference, "accountFingerprintFormat">;
   return reference.fixtureSignature === wiseResumeFixtureSignature(reference.resumeRecordId)
-    ? reference
+    ? { ...reference, accountFingerprintFormat: fingerprintFormat }
     : null;
 }
 
@@ -98,6 +108,26 @@ export function serializeWiseResumeFixtureReference(reference: WiseResumeFixture
     fixtureSignature: reference.fixtureSignature,
     createdByWiseDemo: reference.createdByWiseDemo,
     lastValidatedAt: reference.lastValidatedAt,
+  };
+}
+
+export function migrateLegacyWiseResumeFixtureReference(input: {
+  reference: WiseResumeFixtureReference;
+  authenticatedAccountConfirmed: boolean;
+  expectedAccountFingerprint: string;
+  legacyExpectedAccountFingerprint: string;
+}): WiseResumeFixtureReference | null {
+  if (input.reference.accountFingerprintFormat !== "legacy-v0") return input.reference;
+  if (
+    !input.authenticatedAccountConfirmed ||
+    input.reference.accountFingerprint !== input.legacyExpectedAccountFingerprint
+  ) {
+    return null;
+  }
+  return {
+    ...input.reference,
+    accountFingerprint: input.expectedAccountFingerprint,
+    accountFingerprintFormat: "canonical-v1",
   };
 }
 

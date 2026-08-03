@@ -76,6 +76,7 @@ test("directed failure diagnostics retain safe audit, checkpoint, identity, and 
                 sourceAvailable: false,
                 authenticatedAccountConfirmed: false,
                 confidence: 0,
+                mismatchCategory: "identity-source-unavailable",
               },
               totalResumeCount: 0,
               fixtureResumeCount: 0,
@@ -129,12 +130,14 @@ test("directed failure diagnostics retain safe audit, checkpoint, identity, and 
               sourceAvailable: false,
               authenticatedAccountConfirmed: false,
               confidence: 0,
+              mismatchCategory: "identity-source-unavailable",
             },
             {
               source: "scoped-account-control",
               sourceAvailable: true,
               authenticatedAccountConfirmed: true,
               confidence: 0.84,
+              mismatchCategory: null,
             },
           ],
           expires_at: null,
@@ -165,6 +168,7 @@ test("directed failure diagnostics retain safe audit, checkpoint, identity, and 
   assert.equal(diagnostics.demo.steelSessionId, "cafa…fdda");
   assert.equal(diagnostics.audit.status, "inconclusive");
   assert.equal(diagnostics.audit.identityEvidence.sourceAvailable, false);
+  assert.equal(diagnostics.audit.identityEvidence.mismatchCategory, "identity-source-unavailable");
   assert.equal(diagnostics.checkpoints.items.length, 2);
   assert.deepEqual(
     diagnostics.identityAttempts.map((attempt) => attempt.source),
@@ -211,12 +215,14 @@ test("primary and fallback identity attempts persist independently without ident
     sourceAvailable: false,
     authenticatedAccountConfirmed: false,
     confidence: 0,
+    mismatchCategory: "identity-source-unavailable",
   });
   await persister.persistIdentityAttempt({
     source: "scoped-account-control",
     sourceAvailable: true,
     authenticatedAccountConfirmed: true,
     confidence: 0.84,
+    mismatchCategory: null,
   });
   const payload = artifacts.at(-1)?.payload_json as Array<{ source: string }>;
   assert.deepEqual(
@@ -253,6 +259,7 @@ test("failure persistence saves each checkpoint, identity attempt, and audit bef
     sourceAvailable: false,
     authenticatedAccountConfirmed: false,
     confidence: 0,
+    mismatchCategory: "identity-source-unavailable",
   });
   await persister.persistAudit(audit("inconclusive"));
   assert.deepEqual(

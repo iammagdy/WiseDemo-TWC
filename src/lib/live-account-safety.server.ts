@@ -81,12 +81,14 @@ export function serializeLiveAccountSafetyAudit(audit: LiveAccountSafetyAudit) {
           sourceAvailable: audit.identityEvidence.sourceAvailable,
           authenticatedAccountConfirmed: audit.identityEvidence.authenticatedAccountConfirmed,
           confidence: audit.identityEvidence.confidence,
+          mismatchCategory: audit.identityEvidence.mismatchCategory,
         }
       : {
           source: "unavailable",
           sourceAvailable: false,
           authenticatedAccountConfirmed: false,
           confidence: 0,
+          mismatchCategory: "identity-source-unavailable",
         },
     totalResumeCount: audit.totalResumeCount,
     fixtureResumeCount: audit.fixtureResumeCount,

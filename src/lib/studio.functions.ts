@@ -85,7 +85,9 @@ import {
   parseWiseResumeFixtureReference,
   serializeWiseResumeFixtureReference,
   wiseResumeAccountFingerprint,
+  migrateLegacyWiseResumeFixtureReference,
 } from "./wiseresume-fixture-isolation.server";
+import { wiseResumeLegacyAccountFingerprint } from "./wiseresume-account-fingerprint.server";
 
 type WorkspaceContext = { repository: WiseDemoRepository };
 type DirectedPreflight = {
@@ -703,13 +705,17 @@ export const captureDirectedDemo = createServerFn({ method: "POST" })
     if (!credentials)
       throw new Error("Directed WiseResume capture requires encrypted test credentials.");
     const credentialMeta = await context.repository.getCredential(project.id);
-    const accountFingerprint = wiseResumeAccountFingerprint(credentials.username);
+    const expectedAccountFingerprint = wiseResumeAccountFingerprint(credentials.username);
+    const legacyExpectedAccountFingerprint = wiseResumeLegacyAccountFingerprint(
+      credentials.username,
+    );
     const storedFixture = parseWiseResumeFixtureReference(
       artifacts.find(
         (artifact) =>
           artifact.artifact_kind === "wiseresume-fixture-reference" && artifact.status === "ready",
       )?.payload_json,
     );
+    let fixtureForCapture = storedFixture;
     const mapState = classifyAuthenticatedMap({
       credentialSavedAt: credentialMeta?.updated_at,
       authenticatedMapUpdatedAt: project.site_map_updated_at,
@@ -828,12 +834,20 @@ export const captureDirectedDemo = createServerFn({ method: "POST" })
             recordingLocale: demo.recording_locale,
             execute: (adapterContext) =>
               auditWiseResumeFixtureIsolationAccount(adapterContext, {
-                expectedAccountFingerprint: accountFingerprint,
-                accountFingerprint,
+                expectedAccountFingerprint,
+                legacyExpectedAccountFingerprint,
                 storedFixture,
                 onIdentityAttempt: failureDiagnostics.persistIdentityAttempt,
               }),
           });
+          if (fixtureForCapture) {
+            fixtureForCapture = migrateLegacyWiseResumeFixtureReference({
+              reference: fixtureForCapture,
+              authenticatedAccountConfirmed: audit.authenticatedAccountConfirmed,
+              expectedAccountFingerprint,
+              legacyExpectedAccountFingerprint,
+            });
+          }
           await failureDiagnostics.persistAudit(audit);
           return audit;
         },
@@ -856,8 +870,8 @@ export const captureDirectedDemo = createServerFn({ method: "POST" })
               prepareWiseResumeFixtureSmartTailoring(adapterContext, {
                 liveAccountSafetyAudit: liveAccountSafetyAudit as
                   LiveAccountSafetyAudit | undefined,
-                storedFixture,
-                accountFingerprint,
+                storedFixture: fixtureForCapture,
+                accountFingerprint: expectedAccountFingerprint,
                 assertPrivacyShield: async (checkpoint) => {
                   privacyShieldCheckpoints.push(
                     await assertPrivacyShieldActive({

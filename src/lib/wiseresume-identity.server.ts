@@ -1,3 +1,8 @@
+import {
+  classifyWiseResumeAccountFingerprintMismatch,
+  wiseResumeAccountFingerprintRuntimeExpression,
+} from "./wiseresume-account-fingerprint.server.ts";
+
 export type WiseResumeIdentityEvidence = {
   source:
     | "appwrite-account"
@@ -8,6 +13,11 @@ export type WiseResumeIdentityEvidence = {
   sourceAvailable: boolean;
   authenticatedAccountConfirmed: boolean;
   confidence: number;
+  mismatchCategory:
+    | "canonical-format-mismatch"
+    | "confirmed-different-account"
+    | "identity-source-unavailable"
+    | null;
 };
 
 type WiseResumeIdentityAttempt = {
@@ -31,23 +41,18 @@ export function createWiseResumeIdentityAttemptEvidence(input: {
     sourceAvailable: input.sourceAvailable,
     authenticatedAccountConfirmed,
     confidence: input.sourceAvailable ? (input.source === "appwrite-account" ? 1 : 0.84) : 0,
+    mismatchCategory: input.sourceAvailable
+      ? classifyWiseResumeAccountFingerprintMismatch({
+          expectedAccountFingerprint: input.expectedAccountFingerprint,
+          liveAccountFingerprint: input.liveAccountFingerprint,
+        })
+      : "identity-source-unavailable",
   };
-}
-
-function fingerprintExpression(): string {
-  return `const fingerprint = (value) => {
-    let hash = 2166136261;
-    for (const character of value.trim().toLowerCase()) {
-      hash ^= character.charCodeAt(0);
-      hash = Math.imul(hash, 16777619);
-    }
-    return (hash >>> 0).toString(16);
-  };`;
 }
 
 export function wiseResumeAppwriteAccountIdentityExpression(): string {
   return `(async () => {
-    ${fingerprintExpression()}
+    ${wiseResumeAccountFingerprintRuntimeExpression()}
     try {
       const accountResponse = await fetch("https://fra.cloud.appwrite.io/v1/account", {
         credentials: "include",
@@ -69,7 +74,7 @@ export function wiseResumeAppwriteAccountIdentityExpression(): string {
 
 export function wiseResumeScopedAccountControlIdentityExpression(): string {
   return `(() => {
-    ${fingerprintExpression()}
+    ${wiseResumeAccountFingerprintRuntimeExpression()}
     const control = document.querySelector("[data-user-email]");
     const identifier = control?.getAttribute("data-user-email") || "";
     return {
@@ -97,6 +102,7 @@ export function resolveWiseResumeIdentity(input: {
       sourceAvailable: false,
       authenticatedAccountConfirmed: false,
       confidence: 0,
+      mismatchCategory: "identity-source-unavailable",
     };
   }
   return createWiseResumeIdentityAttemptEvidence({

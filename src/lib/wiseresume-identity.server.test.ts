@@ -7,6 +7,33 @@ import {
   wiseResumeAppwriteAccountIdentityExpression,
   wiseResumeScopedAccountControlIdentityExpression,
 } from "./wiseresume-identity.server.ts";
+import {
+  wiseResumeAccountFingerprint,
+  wiseResumeLegacyAccountFingerprint,
+} from "./wiseresume-account-fingerprint.server.ts";
+
+const normalizedIdentifier = "identity-alpha";
+
+async function evaluatePrimaryFingerprint(identifier: string): Promise<string | null> {
+  const expression = wiseResumeAppwriteAccountIdentityExpression();
+  const evaluate = new Function("fetch", `return (${expression});`) as (
+    fetch: typeof globalThis.fetch,
+  ) => Promise<{ liveAccountFingerprint: string | null }>;
+  return (await evaluate(async () => new Response(JSON.stringify({ email: identifier }))))
+    .liveAccountFingerprint;
+}
+
+function evaluateFallbackFingerprint(identifier: string): string | null {
+  const expression = wiseResumeScopedAccountControlIdentityExpression();
+  const evaluate = new Function("document", `return (${expression});`) as (document: {
+    querySelector: () => { getAttribute: () => string };
+  }) => {
+    liveAccountFingerprint: string | null;
+  };
+  return evaluate({
+    querySelector: () => ({ getAttribute: () => identifier }),
+  }).liveAccountFingerprint;
+}
 
 test("primary authenticated Appwrite account identity confirms an expected fingerprint", () => {
   const evidence = resolveWiseResumeIdentity({
@@ -18,6 +45,7 @@ test("primary authenticated Appwrite account identity confirms an expected finge
     sourceAvailable: true,
     authenticatedAccountConfirmed: true,
     confidence: 1,
+    mismatchCategory: null,
   });
   assert.equal(classifyWiseResumeIdentityEvidence(evidence), "safe");
 });
@@ -61,4 +89,45 @@ test("identity expressions are independent and serialized evidence has no raw id
     }),
   );
   assert.doesNotMatch(serialized, /fingerprint|email|accountId|name|password|credential|secret/i);
+});
+
+test("server and both generated browser identity paths share the canonical fingerprint contract", async () => {
+  const expected = wiseResumeAccountFingerprint(normalizedIdentifier);
+  assert.equal(
+    await evaluatePrimaryFingerprint(`  ${normalizedIdentifier.toUpperCase()}  `),
+    expected,
+  );
+  assert.equal(evaluateFallbackFingerprint(` ${normalizedIdentifier.toUpperCase()} `), expected);
+  assert.match(expected, /^wr-account-v1-[\da-f]+$/);
+  assert.notEqual(expected, wiseResumeAccountFingerprint("identity-beta"));
+});
+
+test("a raw browser hash is classified explicitly as the historic format mismatch", () => {
+  const canonical = wiseResumeAccountFingerprint(normalizedIdentifier);
+  const legacy = wiseResumeLegacyAccountFingerprint(normalizedIdentifier);
+  const rawHash = canonical.replace(/^wr-account-v1-/, "");
+  const evidence = resolveWiseResumeIdentity({
+    expectedAccountFingerprint: legacy,
+    primary: { sourceAvailable: true, liveAccountFingerprint: rawHash },
+  });
+  assert.equal(evidence.authenticatedAccountConfirmed, false);
+  assert.equal(evidence.mismatchCategory, "canonical-format-mismatch");
+  assert.equal(classifyWiseResumeIdentityEvidence(evidence), "unsafe");
+});
+
+test("a canonical different account remains unsafe and unavailable evidence remains inconclusive", () => {
+  const expected = wiseResumeAccountFingerprint(normalizedIdentifier);
+  const different = wiseResumeAccountFingerprint("identity-beta");
+  const mismatch = resolveWiseResumeIdentity({
+    expectedAccountFingerprint: expected,
+    primary: { sourceAvailable: true, liveAccountFingerprint: different },
+  });
+  const unavailable = resolveWiseResumeIdentity({
+    expectedAccountFingerprint: expected,
+    primary: { sourceAvailable: false, liveAccountFingerprint: null },
+  });
+  assert.equal(mismatch.mismatchCategory, "confirmed-different-account");
+  assert.equal(classifyWiseResumeIdentityEvidence(mismatch), "unsafe");
+  assert.equal(unavailable.mismatchCategory, "identity-source-unavailable");
+  assert.equal(classifyWiseResumeIdentityEvidence(unavailable), "inconclusive");
 });

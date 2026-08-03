@@ -697,20 +697,6 @@ async function readWiseResumeFixtureInventory(
   };
 }
 
-export function evaluateWiseResumeAuthenticatedIdentity(input: {
-  identitySourceAvailable: boolean;
-  expectedAccountFingerprint: string;
-  liveAccountFingerprint: string | null;
-}): { identitySourceAvailable: boolean; authenticatedAccountConfirmed: boolean } {
-  return {
-    identitySourceAvailable: input.identitySourceAvailable,
-    authenticatedAccountConfirmed:
-      input.identitySourceAvailable &&
-      input.liveAccountFingerprint !== null &&
-      input.liveAccountFingerprint === input.expectedAccountFingerprint,
-  };
-}
-
 async function readWiseResumeAuthenticatedIdentity(
   context: ProductLocaleAdapterContext,
   expectedAccountFingerprint: string,
@@ -766,7 +752,7 @@ export async function auditWiseResumeFixtureIsolationAccount(
   context: ProductLocaleAdapterContext,
   input: {
     expectedAccountFingerprint: string;
-    accountFingerprint: string;
+    legacyExpectedAccountFingerprint: string;
     storedFixture: WiseResumeFixtureReference | null;
     onIdentityAttempt?: (
       evidence: import("../wiseresume-identity.server.ts").WiseResumeIdentityEvidence,
@@ -809,13 +795,17 @@ export async function auditWiseResumeFixtureIsolationAccount(
     };
   }
   if (identity.sourceAvailable && !identity.authenticatedAccountConfirmed) {
+    const reason =
+      identity.mismatchCategory === "canonical-format-mismatch"
+        ? "Authenticated account identity used a non-canonical fingerprint format."
+        : "Authenticated account identity did not match the configured credential.";
     return {
       ...audit,
       identityEvidence: identity,
       status: "unsafe",
       fixtureIsolated: false,
       mutationScopeLockedToFixture: false,
-      reasons: ["Authenticated account identity did not match the configured credential."],
+      reasons: [reason],
     };
   }
   if (!facts.inventoryResolved && audit.status === "safe") {
@@ -826,7 +816,15 @@ export async function auditWiseResumeFixtureIsolationAccount(
       reasons: ["Resume inventory could not be resolved."],
     };
   }
-  if (input.storedFixture && input.storedFixture.accountFingerprint !== input.accountFingerprint) {
+  const legacyFixtureMatchesExpectedIdentity =
+    input.storedFixture?.accountFingerprintFormat === "legacy-v0" &&
+    input.storedFixture.accountFingerprint === input.legacyExpectedAccountFingerprint &&
+    identity.authenticatedAccountConfirmed;
+  if (
+    input.storedFixture &&
+    input.storedFixture.accountFingerprint !== input.expectedAccountFingerprint &&
+    !legacyFixtureMatchesExpectedIdentity
+  ) {
     return {
       ...audit,
       status: "unsafe",

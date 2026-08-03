@@ -31,6 +31,16 @@ type FailureDiagnosticRepository = {
 
 type JsonRecord = Record<string, Json | undefined>;
 
+function safeMismatchCategory(value: string | null): string | null {
+  return [
+    "canonical-format-mismatch",
+    "confirmed-different-account",
+    "identity-source-unavailable",
+  ].includes(value ?? "")
+    ? value
+    : null;
+}
+
 export function createDirectedFailureDiagnosticPersister(input: {
   repository: Pick<WiseDemoRepository, "createDirectorArtifact">;
   projectId: string;
@@ -44,6 +54,7 @@ export function createDirectedFailureDiagnosticPersister(input: {
     sourceAvailable: boolean;
     authenticatedAccountConfirmed: boolean;
     confidence: number;
+    mismatchCategory: string | null;
   }> = [];
   let checkpointRevision = 0;
   let identityRevision = 0;
@@ -96,12 +107,14 @@ export function createDirectedFailureDiagnosticPersister(input: {
       sourceAvailable: boolean;
       authenticatedAccountConfirmed: boolean;
       confidence: number;
+      mismatchCategory: string | null;
     }) {
       identityAttempts.push({
         source: evidence.source.slice(0, 64),
         sourceAvailable: evidence.sourceAvailable === true,
         authenticatedAccountConfirmed: evidence.authenticatedAccountConfirmed === true,
         confidence: Number.isFinite(evidence.confidence) ? evidence.confidence : 0,
+        mismatchCategory: safeMismatchCategory(evidence.mismatchCategory),
       });
       identityRevision += 1;
       await safelyPersist({
@@ -202,6 +215,7 @@ export async function readDirectedFailureDiagnostics(
           sourceAvailable: asBoolean(attempt.sourceAvailable),
           authenticatedAccountConfirmed: asBoolean(attempt.authenticatedAccountConfirmed),
           confidence: asNumber(attempt.confidence),
+          mismatchCategory: safeMismatchCategory(asString(attempt.mismatchCategory, 64)),
         };
       })
     : [];
@@ -222,6 +236,7 @@ export async function readDirectedFailureDiagnostics(
         sourceAvailable: asBoolean(identity.sourceAvailable),
         authenticatedAccountConfirmed: asBoolean(identity.authenticatedAccountConfirmed),
         confidence: asNumber(identity.confidence),
+        mismatchCategory: safeMismatchCategory(asString(identity.mismatchCategory, 64)),
       },
       totalResumeCount: asNumber(audit.totalResumeCount),
       fixtureResumeCount: asNumber(audit.fixtureResumeCount),

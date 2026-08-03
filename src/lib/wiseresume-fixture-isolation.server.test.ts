@@ -7,16 +7,17 @@ import {
   assertWiseResumeFixtureMutationAllowed,
   createWiseResumeFixtureIsolationAudit,
   createWiseResumeFixtureReference,
+  migrateLegacyWiseResumeFixtureReference,
   parseWiseResumeFixtureReference,
   serializeWiseResumeFixtureReference,
   wiseResumeAccountFingerprint,
 } from "./wiseresume-fixture-isolation.server.ts";
 import {
   evaluateWiseResumeFixtureViewportSafety,
-  evaluateWiseResumeAuthenticatedIdentity,
   wiseResumeFixtureRouteExpression,
   wiseResumeFixtureWriteExpression,
 } from "./product-adapters/wiseresume.server.ts";
+import { wiseResumeLegacyAccountFingerprint } from "./wiseresume-account-fingerprint.server.ts";
 
 const accountFingerprint = wiseResumeAccountFingerprint("demo-user@test.example");
 const fixture = createWiseResumeFixtureReference({
@@ -91,23 +92,32 @@ test("fixture conflicts and unresolved identity cannot unlock mutation", () => {
   assert.throws(() => assertWiseResumeFixtureCreationAllowed(unresolved));
 });
 
-test("authenticated account identity compares only opaque in-memory fingerprints", () => {
-  assert.deepEqual(
-    evaluateWiseResumeAuthenticatedIdentity({
-      identitySourceAvailable: true,
-      expectedAccountFingerprint: "fixture-account-fingerprint",
-      liveAccountFingerprint: "fixture-account-fingerprint",
+test("legacy fixture fingerprints parse safely and migrate only after canonical identity confirmation", () => {
+  const legacy = {
+    ...serializeWiseResumeFixtureReference(fixture),
+    accountFingerprint: wiseResumeLegacyAccountFingerprint("demo-user@test.example"),
+  };
+  const parsed = parseWiseResumeFixtureReference(legacy);
+  assert.equal(parsed?.accountFingerprintFormat, "legacy-v0");
+  assert.equal(
+    migrateLegacyWiseResumeFixtureReference({
+      reference: parsed!,
+      authenticatedAccountConfirmed: false,
+      expectedAccountFingerprint: accountFingerprint,
+      legacyExpectedAccountFingerprint: legacy.accountFingerprint,
     }),
-    { identitySourceAvailable: true, authenticatedAccountConfirmed: true },
+    null,
   );
-  assert.deepEqual(
-    evaluateWiseResumeAuthenticatedIdentity({
-      identitySourceAvailable: false,
-      expectedAccountFingerprint: "fixture-account-fingerprint",
-      liveAccountFingerprint: null,
-    }),
-    { identitySourceAvailable: false, authenticatedAccountConfirmed: false },
-  );
+  const migrated = migrateLegacyWiseResumeFixtureReference({
+    reference: parsed!,
+    authenticatedAccountConfirmed: true,
+    expectedAccountFingerprint: accountFingerprint,
+    legacyExpectedAccountFingerprint: legacy.accountFingerprint,
+  });
+  assert.equal(migrated?.accountFingerprint, accountFingerprint);
+  assert.equal(migrated?.accountFingerprintFormat, "canonical-v1");
+  assert.equal(migrated?.fixtureSignature, fixture.fixtureSignature);
+  assert.equal(migrated?.resumeRecordId, fixture.resumeRecordId);
 });
 
 test("fixture mutation rejects missing, broad, or destructive targets", () => {
