@@ -163,6 +163,7 @@ export type DirectorArtifactKind =
   | "live-account-safety-audit"
   | "wiseresume-fixture-reference"
   | "wiseresume-dashboard-workspace"
+  | "recording-locale-diagnostics"
   | "privacy-shield-checkpoints"
   | "identity-source-attempts"
   | "capture-plan"

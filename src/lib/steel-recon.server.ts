@@ -9,12 +9,17 @@ import {
   verifyApplicationLocale,
   type ApplicationLocaleState,
   type RecordingLocale,
+  type RecordingLocaleDiagnostic,
 } from "./recording-locale";
 import {
+  CdpRecordingLocaleError,
+  type CdpLocaleMode,
+  cdpLocaleConnectionKey,
   cdpCall,
   configureCdpRecordingLocale,
   delay,
   openCdp,
+  recordingLocaleDiagnostic,
   type DecryptedCredentials,
 } from "./steel-recorder.server";
 import { isVerifiedLoginOutcome } from "./demo-state";
@@ -128,11 +133,20 @@ const EXTRACT_EXPRESSION = `(() => {
   return JSON.stringify({ url: location.href, title: document.title, headings, navLinks, clickables, inputs, visibleText: text(document.body).slice(0, 2400) });
 })()`;
 
-type Cdp = { socket: WebSocket; sid: string; nextId: () => number };
+type Cdp = {
+  socket: WebSocket;
+  sid: string;
+  nextId: () => number;
+  localeResult: Awaited<ReturnType<typeof configureCdpRecordingLocale>>;
+};
 
 async function attach(
   websocketUrl: string,
   recordingLocale: RecordingLocale = DEFAULT_RECORDING_LOCALE,
+  options: {
+    localeMode?: CdpLocaleMode;
+    onLocaleDiagnostic?: (diagnostic: RecordingLocaleDiagnostic) => Promise<void> | void;
+  } = {},
 ): Promise<Cdp> {
   const socket = await openCdp(websocketUrl);
   let id = 1;
@@ -149,8 +163,26 @@ async function attach(
   const sid = attached.sessionId;
   await cdpCall(socket, nextId(), "Page.enable", {}, sid);
   await cdpCall(socket, nextId(), "Runtime.enable", {}, sid);
-  await configureCdpRecordingLocale(socket, nextId, sid, recordingLocale);
-  return { socket, sid, nextId };
+  const localeMode = options.localeMode ?? "verify";
+  try {
+    const localeResult = await configureCdpRecordingLocale(socket, nextId, sid, recordingLocale, {
+      mode: localeMode,
+      connectionKey: cdpLocaleConnectionKey(websocketUrl, page.targetId),
+    });
+    await options.onLocaleDiagnostic?.(recordingLocaleDiagnostic(localeResult, localeMode));
+    return { socket, sid, nextId, localeResult };
+  } catch (error) {
+    if (error instanceof CdpRecordingLocaleError)
+      await options.onLocaleDiagnostic?.(
+        recordingLocaleDiagnostic(error.result, localeMode, error.conflict),
+      );
+    try {
+      socket.close();
+    } catch {
+      /* ignore */
+    }
+    throw error;
+  }
 }
 
 async function evaluate(cdp: Cdp, expression: string): Promise<unknown> {
@@ -183,8 +215,12 @@ export async function assertPrivacyShieldActive(input: {
   websocketUrl: string;
   checkpoint: string;
   recordingLocale?: RecordingLocale;
+  onLocaleDiagnostic?: (diagnostic: RecordingLocaleDiagnostic) => Promise<void> | void;
 }): Promise<PrivacyShieldCheckpointResult> {
-  const cdp = await attach(input.websocketUrl, input.recordingLocale ?? DEFAULT_RECORDING_LOCALE);
+  const cdp = await attach(input.websocketUrl, input.recordingLocale ?? DEFAULT_RECORDING_LOCALE, {
+    localeMode: "verify",
+    onLocaleDiagnostic: input.onLocaleDiagnostic,
+  });
   try {
     return await ensurePrivacyShieldInCdp(cdp, input.checkpoint);
   } finally {
@@ -199,8 +235,12 @@ export async function assertPrivacyShieldActive(input: {
 export async function installWiseDemoPrivacyShield(input: {
   websocketUrl: string;
   recordingLocale?: RecordingLocale;
+  onLocaleDiagnostic?: (diagnostic: RecordingLocaleDiagnostic) => Promise<void> | void;
 }): Promise<PrivacyShieldRegistration> {
-  const cdp = await attach(input.websocketUrl, input.recordingLocale ?? DEFAULT_RECORDING_LOCALE);
+  const cdp = await attach(input.websocketUrl, input.recordingLocale ?? DEFAULT_RECORDING_LOCALE, {
+    localeMode: "initialize",
+    onLocaleDiagnostic: input.onLocaleDiagnostic,
+  });
   try {
     const shield = (await cdpCall(
       cdp.socket,
@@ -233,10 +273,14 @@ export async function removeWiseDemoPrivacyShield(input: {
   websocketUrl: string;
   registration: PrivacyShieldRegistration | undefined;
   recordingLocale?: RecordingLocale;
+  onLocaleDiagnostic?: (diagnostic: RecordingLocaleDiagnostic) => Promise<void> | void;
 }): Promise<void> {
   if (!input.registration)
     throw new Error("The WiseDemo privacy shield registration is unavailable.");
-  const cdp = await attach(input.websocketUrl, input.recordingLocale ?? DEFAULT_RECORDING_LOCALE);
+  const cdp = await attach(input.websocketUrl, input.recordingLocale ?? DEFAULT_RECORDING_LOCALE, {
+    localeMode: "verify",
+    onLocaleDiagnostic: input.onLocaleDiagnostic,
+  });
   try {
     await cdpCall(
       cdp.socket,
@@ -651,9 +695,13 @@ function productLocaleAdapterContext(cdp: Cdp): ProductLocaleAdapterContext {
 export async function withProductLocaleAdapterContext<T>(input: {
   websocketUrl: string;
   recordingLocale: RecordingLocale;
+  onLocaleDiagnostic?: (diagnostic: RecordingLocaleDiagnostic) => Promise<void> | void;
   execute: (context: ProductLocaleAdapterContext) => Promise<T>;
 }): Promise<T> {
-  const cdp = await attach(input.websocketUrl, input.recordingLocale);
+  const cdp = await attach(input.websocketUrl, input.recordingLocale, {
+    localeMode: "verify",
+    onLocaleDiagnostic: input.onLocaleDiagnostic,
+  });
   try {
     return await input.execute(productLocaleAdapterContext(cdp));
   } finally {
@@ -823,9 +871,13 @@ export async function authenticateSite(input: {
   recordingLocale?: RecordingLocale;
   privacyShielded?: boolean;
   onPrivacyShieldCheckpoint?: (result: PrivacyShieldCheckpointResult) => Promise<void> | void;
+  onLocaleDiagnostic?: (diagnostic: RecordingLocaleDiagnostic) => Promise<void> | void;
 }): Promise<AuthenticatedSiteResult> {
   const recordingLocale = input.recordingLocale ?? DEFAULT_RECORDING_LOCALE;
-  const cdp = await attach(input.websocketUrl, recordingLocale);
+  const cdp = await attach(input.websocketUrl, recordingLocale, {
+    localeMode: "verify",
+    onLocaleDiagnostic: input.onLocaleDiagnostic,
+  });
   try {
     await signIn(
       cdp,
@@ -909,7 +961,7 @@ export async function reconSite(input: {
   let loggedIn = false;
 
   const recordingLocale = input.recordingLocale ?? DEFAULT_RECORDING_LOCALE;
-  const cdp = await attach(websocketUrl, recordingLocale);
+  const cdp = await attach(websocketUrl, recordingLocale, { localeMode: "initialize" });
   try {
     await goto(cdp, baseUrl, 3500);
     const landing = await captureObservation(cdp);

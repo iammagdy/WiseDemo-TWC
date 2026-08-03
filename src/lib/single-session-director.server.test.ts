@@ -150,6 +150,7 @@ test("privacy shield is installed before authentication and removed only after p
       return { executed: 1, completed: true, diagnostics: [] };
     },
     finalActions: [],
+    sleep: async () => undefined,
   });
   assert.deepEqual(order, [
     "publish",
@@ -160,4 +161,42 @@ test("privacy shield is installed before authentication and removed only after p
     "remove-shield",
     "take",
   ]);
+});
+
+test("one-session lifecycle initializes locale once and verifies it for every later attachment", async () => {
+  const localeModes: string[] = [];
+  await runSingleSessionDirectedCapture({
+    sessionBootstrapUrl: "about:blank",
+    createSession: async () => ({ id: "steel-1", websocketUrl: "ws://steel" }),
+    releaseSession: async () => ({ id: "steel-1" }),
+    publishLiveSession: async () => undefined,
+    installPrivacyShield: async () => {
+      localeModes.push("initialize");
+      return { shield: true };
+    },
+    assertPrivacyShield: async () => {
+      localeModes.push("verify");
+    },
+    authenticate: async () => {
+      localeModes.push("verify");
+    },
+    liveAccountSafetyAudit: async () => {
+      localeModes.push("verify");
+      return { status: "safe" };
+    },
+    assertMutationAllowed: () => undefined,
+    preflight: async () => {
+      localeModes.push("verify");
+      return { safe: true };
+    },
+    removePrivacyShield: async () => undefined,
+    executeFinalTake: async () => {
+      localeModes.push("verify");
+      return { executed: 1, completed: true, diagnostics: [] };
+    },
+    finalActions: [],
+    sleep: async () => undefined,
+  });
+  assert.equal(localeModes.filter((mode) => mode === "initialize").length, 1);
+  assert.equal(localeModes.filter((mode) => mode === "verify").length, 8);
 });

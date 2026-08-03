@@ -7,6 +7,8 @@ import type { RuntimeBrowserMetrics } from "../composition/source-viewport.ts";
 import {
   DEFAULT_RECORDING_LOCALE,
   localeProfile,
+  recordingLocaleCategory,
+  type RecordingLocaleDiagnostic,
   type RecordingLocale,
 } from "./recording-locale.ts";
 import { serverEnv } from "./server-env.server.ts";
@@ -286,62 +288,302 @@ export function cdpCall(
   });
 }
 
+export type CdpLocaleMode = "initialize" | "verify";
+
+export type CdpRecordingLocaleResult = {
+  requestedLocale: RecordingLocale;
+  effectiveLocale: string | null;
+  localeOverride:
+    "applied" | "already-effective" | "already-active-verified" | "not-required" | "failed";
+  acceptLanguageApplied: boolean;
+  userAgentLanguageApplied: boolean;
+  verified: boolean;
+};
+
+type CdpLocaleCommand = (method: string, params?: Record<string, unknown>) => Promise<unknown>;
+type CdpLocaleRuntime = {
+  language?: unknown;
+  languages?: unknown;
+  intlLocale?: unknown;
+  userAgent?: unknown;
+  platform?: unknown;
+};
+
+const localeInitializationLocks = new Map<string, Promise<void>>();
+const MAX_LOCALE_INITIALIZATION_LOCKS = 64;
+
+export function cdpLocaleConnectionKey(connectionIdentity: string, targetIdentity: string): string {
+  let hash = 2_166_136_261;
+  for (const character of `${connectionIdentity}|${targetIdentity}`) {
+    hash ^= character.charCodeAt(0);
+    hash = Math.imul(hash, 16_777_619);
+  }
+  return `locale-${(hash >>> 0).toString(36)}`;
+}
+
+export class CdpRecordingLocaleError extends Error {
+  readonly result: CdpRecordingLocaleResult;
+  readonly conflict: boolean;
+
+  constructor(message: string, result: CdpRecordingLocaleResult, conflict = false) {
+    super(message);
+    this.result = result;
+    this.conflict = conflict;
+  }
+}
+
+function normalizedLocale(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().replace(/_/g, "-").toLowerCase();
+  return /^[a-z]{2,3}(?:-[a-z0-9]{2,8})*$/.test(normalized) ? normalized : null;
+}
+
+function effectiveLocaleFromRuntime(value: unknown): string | null {
+  const runtime = value && typeof value === "object" ? (value as CdpLocaleRuntime) : {};
+  const languages = Array.isArray(runtime.languages) ? runtime.languages : [];
+  return (
+    normalizedLocale(runtime.language) ??
+    normalizedLocale(runtime.intlLocale) ??
+    languages.map(normalizedLocale).find((locale): locale is string => Boolean(locale)) ??
+    null
+  );
+}
+
+function localeMatchesRequested(
+  effectiveLocale: string | null,
+  requestedLocale: RecordingLocale,
+): boolean {
+  if (requestedLocale === "auto") return true;
+  const language = requestedLocale === "english" ? "en" : "ar";
+  return effectiveLocale === language || effectiveLocale?.startsWith(`${language}-`) === true;
+}
+
+function duplicateOverrideError(error: unknown): boolean {
+  return (
+    error instanceof Error && /another locale override is already in effect/i.test(error.message)
+  );
+}
+
+function localeResult(
+  requestedLocale: RecordingLocale,
+  effectiveLocale: string | null,
+  localeOverride: CdpRecordingLocaleResult["localeOverride"],
+  acceptLanguageApplied: boolean,
+  userAgentLanguageApplied: boolean,
+): CdpRecordingLocaleResult {
+  return {
+    requestedLocale,
+    effectiveLocale,
+    localeOverride,
+    acceptLanguageApplied,
+    userAgentLanguageApplied,
+    verified:
+      localeOverride !== "failed" && localeMatchesRequested(effectiveLocale, requestedLocale),
+  };
+}
+
+async function readCdpEffectiveLocale(
+  call: CdpLocaleCommand,
+): Promise<{ locale: string | null; runtime: CdpLocaleRuntime }> {
+  const response = (await call("Runtime.evaluate", {
+    expression:
+      "({language:navigator.language,languages:Array.from(navigator.languages||[]),intlLocale:Intl.DateTimeFormat().resolvedOptions().locale,userAgent:navigator.userAgent,platform:navigator.platform})",
+    returnByValue: true,
+  })) as { result?: { value?: CdpLocaleRuntime } };
+  const runtime = response.result?.value ?? {};
+  return { locale: effectiveLocaleFromRuntime(runtime), runtime };
+}
+
+async function applyAttachmentLocaleNetwork(
+  call: CdpLocaleCommand,
+  locale: RecordingLocale,
+  runtime: CdpLocaleRuntime,
+): Promise<{ acceptLanguageApplied: boolean; userAgentLanguageApplied: boolean }> {
+  const profile = localeProfile(locale);
+  if (!profile) return { acceptLanguageApplied: false, userAgentLanguageApplied: false };
+  await call("Network.setExtraHTTPHeaders", {
+    headers: { "Accept-Language": profile.acceptLanguage },
+  });
+  const userAgent = typeof runtime.userAgent === "string" ? runtime.userAgent : null;
+  if (!userAgent) return { acceptLanguageApplied: true, userAgentLanguageApplied: false };
+  try {
+    await call("Network.setUserAgentOverride", {
+      userAgent,
+      acceptLanguage: profile.acceptLanguage,
+      platform: typeof runtime.platform === "string" ? runtime.platform : "Win32",
+    });
+    return { acceptLanguageApplied: true, userAgentLanguageApplied: true };
+  } catch {
+    // User-agent override support is attachment-specific. It cannot invalidate a verified locale.
+    return { acceptLanguageApplied: true, userAgentLanguageApplied: false };
+  }
+}
+
+async function runLocaleInitializationLock(
+  key: string,
+  execute: () => Promise<void>,
+): Promise<void> {
+  const existing = localeInitializationLocks.get(key);
+  if (existing) return existing;
+  if (localeInitializationLocks.size >= MAX_LOCALE_INITIALIZATION_LOCKS)
+    localeInitializationLocks.clear();
+  const pending = execute().finally(() => localeInitializationLocks.delete(key));
+  localeInitializationLocks.set(key, pending);
+  return pending;
+}
+
+export function recordingLocaleDiagnostic(
+  result: CdpRecordingLocaleResult,
+  initializationMode: CdpLocaleMode,
+  conflict = false,
+): RecordingLocaleDiagnostic {
+  return {
+    requestedCategory: result.requestedLocale,
+    initializationMode,
+    result:
+      result.localeOverride === "failed"
+        ? conflict
+          ? "conflict"
+          : "failed"
+        : result.localeOverride,
+    effectiveLocaleCategory: recordingLocaleCategory(result.effectiveLocale),
+    verified: result.verified,
+  };
+}
+
+export async function configureCdpRecordingLocaleWithClient(input: {
+  call: CdpLocaleCommand;
+  locale?: RecordingLocale;
+  mode?: CdpLocaleMode;
+  connectionKey: string;
+}): Promise<CdpRecordingLocaleResult> {
+  const locale = input.locale ?? DEFAULT_RECORDING_LOCALE;
+  const mode = input.mode ?? "verify";
+  await input.call("Network.enable", {});
+  let state = await readCdpEffectiveLocale(input.call);
+  let network = await applyAttachmentLocaleNetwork(input.call, locale, state.runtime);
+  if (locale === "auto")
+    return localeResult(
+      locale,
+      state.locale,
+      "not-required",
+      network.acceptLanguageApplied,
+      network.userAgentLanguageApplied,
+    );
+  if (localeMatchesRequested(state.locale, locale))
+    return localeResult(
+      locale,
+      state.locale,
+      "already-effective",
+      network.acceptLanguageApplied,
+      network.userAgentLanguageApplied,
+    );
+  if (mode === "verify") {
+    throw new CdpRecordingLocaleError(
+      "Recording locale is not effective on this CDP attachment.",
+      localeResult(
+        locale,
+        state.locale,
+        "failed",
+        network.acceptLanguageApplied,
+        network.userAgentLanguageApplied,
+      ),
+    );
+  }
+
+  let override: CdpRecordingLocaleResult["localeOverride"] = "failed";
+  await runLocaleInitializationLock(input.connectionKey, async () => {
+    state = await readCdpEffectiveLocale(input.call);
+    if (localeMatchesRequested(state.locale, locale)) {
+      override = "already-effective";
+      return;
+    }
+    const profile = localeProfile(locale);
+    if (!profile) {
+      override = "not-required";
+      return;
+    }
+    try {
+      await input.call("Emulation.setLocaleOverride", { locale: profile.locale });
+      override = "applied";
+    } catch (error) {
+      if (!duplicateOverrideError(error)) {
+        throw new CdpRecordingLocaleError(
+          "Recording locale initialization failed.",
+          localeResult(
+            locale,
+            state.locale,
+            "failed",
+            network.acceptLanguageApplied,
+            network.userAgentLanguageApplied,
+          ),
+        );
+      }
+      const afterDuplicate = await readCdpEffectiveLocale(input.call);
+      if (localeMatchesRequested(afterDuplicate.locale, locale)) {
+        state = afterDuplicate;
+        override = "already-active-verified";
+        return;
+      }
+      throw new CdpRecordingLocaleError(
+        "Recording locale conflicts with an existing browser override.",
+        localeResult(
+          locale,
+          afterDuplicate.locale,
+          "failed",
+          network.acceptLanguageApplied,
+          network.userAgentLanguageApplied,
+        ),
+        true,
+      );
+    }
+    state = await readCdpEffectiveLocale(input.call);
+    if (!localeMatchesRequested(state.locale, locale)) {
+      throw new CdpRecordingLocaleError(
+        "Recording locale could not be verified after initialization.",
+        localeResult(
+          locale,
+          state.locale,
+          "failed",
+          network.acceptLanguageApplied,
+          network.userAgentLanguageApplied,
+        ),
+      );
+    }
+  });
+  state = await readCdpEffectiveLocale(input.call);
+  if (override === "failed" && localeMatchesRequested(state.locale, locale))
+    override = "already-effective";
+  network = await applyAttachmentLocaleNetwork(input.call, locale, state.runtime);
+  const result = localeResult(
+    locale,
+    state.locale,
+    override,
+    network.acceptLanguageApplied,
+    network.userAgentLanguageApplied,
+  );
+  if (!result.verified)
+    throw new CdpRecordingLocaleError("Recording locale verification failed.", {
+      ...result,
+      localeOverride: "failed",
+      verified: false,
+    });
+  return result;
+}
+
 export async function configureCdpRecordingLocale(
   socket: WebSocket,
   nextId: () => number,
   sessionId: string,
   locale: RecordingLocale = DEFAULT_RECORDING_LOCALE,
-): Promise<void> {
-  await cdpCall(socket, nextId(), "Network.enable", {}, sessionId);
-  const profile = localeProfile(locale);
-  if (!profile) return;
-
-  // Emulation has no separate `enable` command in the CDP protocol; invoking
-  // its override commands activates the domain before the first navigation.
-  await cdpCall(
-    socket,
-    nextId(),
-    "Emulation.setLocaleOverride",
-    { locale: profile.locale },
-    sessionId,
-  );
-  await cdpCall(
-    socket,
-    nextId(),
-    "Network.setExtraHTTPHeaders",
-    { headers: { "Accept-Language": profile.acceptLanguage } },
-    sessionId,
-  );
-
-  try {
-    const result = (await cdpCall(
-      socket,
-      nextId(),
-      "Runtime.evaluate",
-      {
-        expression: "({userAgent: navigator.userAgent, platform: navigator.platform})",
-        returnByValue: true,
-      },
-      sessionId,
-    )) as { result?: { value?: { userAgent?: string; platform?: string } } };
-    const userAgent = result.result?.value?.userAgent;
-    if (userAgent) {
-      await cdpCall(
-        socket,
-        nextId(),
-        "Network.setUserAgentOverride",
-        {
-          userAgent,
-          acceptLanguage: profile.acceptLanguage,
-          platform: result.result?.value?.platform ?? "Win32",
-        },
-        sessionId,
-      );
-    }
-  } catch {
-    // Some Chromium builds do not permit the user-agent override on an
-    // attached target. Locale and request headers remain mandatory above.
-  }
+  options: { mode?: CdpLocaleMode; connectionKey?: string } = {},
+): Promise<CdpRecordingLocaleResult> {
+  return configureCdpRecordingLocaleWithClient({
+    locale,
+    mode: options.mode,
+    connectionKey: options.connectionKey ?? `attachment-${sessionId}`,
+    call: (method, params = {}) => cdpCall(socket, nextId(), method, params, sessionId),
+  });
 }
 
 export function delay(ms: number) {
@@ -508,7 +750,11 @@ export async function runScenesOverCdp(
   actions: CdpAction[],
   maxWallMs = 90_000,
   recordingLocale: RecordingLocale = DEFAULT_RECORDING_LOCALE,
-  options?: { now?: () => number },
+  options?: {
+    now?: () => number;
+    localeMode?: CdpLocaleMode;
+    onLocaleDiagnostic?: (diagnostic: RecordingLocaleDiagnostic) => Promise<void> | void;
+  },
 ): Promise<SceneExecutionResult> {
   const socket = await openCdp(websocketUrl);
   const now = options?.now ?? Date.now;
@@ -535,7 +781,18 @@ export async function runScenesOverCdp(
 
     await cdpCall(socket, msgId++, "Page.enable", {}, sid);
     await cdpCall(socket, msgId++, "Runtime.enable", {}, sid);
-    await configureCdpRecordingLocale(socket, () => msgId++, sid, recordingLocale);
+    const localeMode = options?.localeMode ?? "initialize";
+    const localeResult = await configureCdpRecordingLocale(
+      socket,
+      () => msgId++,
+      sid,
+      recordingLocale,
+      {
+        mode: localeMode,
+        connectionKey: cdpLocaleConnectionKey(websocketUrl, pageTarget.targetId),
+      },
+    );
+    await options?.onLocaleDiagnostic?.(recordingLocaleDiagnostic(localeResult, localeMode));
     const evaluate = (expression: string, timeoutMs?: number) =>
       evaluateValue(socket, msgId++, sid, expression, timeoutMs);
 

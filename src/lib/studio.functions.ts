@@ -36,7 +36,11 @@ import {
 } from "./steel-recon.server";
 import { planDemoScenes } from "./scene-planner.server";
 import { stableRecordingUrl } from "./demo-state";
-import { recordingLocaleSchema, type RecordingLocale } from "./recording-locale";
+import {
+  recordingLocaleSchema,
+  type RecordingLocale,
+  type RecordingLocaleDiagnostic,
+} from "./recording-locale";
 import { buildProductIntelligence, replaceScreenshotEvidence } from "./product-intelligence.server";
 import { createLaunchStoryboard } from "./story-director.server";
 import type {
@@ -747,6 +751,10 @@ export const captureDirectedDemo = createServerFn({ method: "POST" })
     });
     const monotonicNow = () => performance.now();
     const privacyShieldCheckpoints: PrivacyShieldCheckpointResult[] = [];
+    const localeDiagnostics: RecordingLocaleDiagnostic[] = [];
+    const recordLocaleDiagnostic = async (diagnostic: RecordingLocaleDiagnostic) => {
+      if (localeDiagnostics.length < 24) localeDiagnostics.push(diagnostic);
+    };
     const failureDiagnostics = createDirectedFailureDiagnosticPersister({
       repository: context.repository,
       projectId: project.id,
@@ -788,12 +796,17 @@ export const captureDirectedDemo = createServerFn({ method: "POST" })
           );
         },
         installPrivacyShield: (websocketUrl) =>
-          installWiseDemoPrivacyShield({ websocketUrl, recordingLocale: demo.recording_locale }),
+          installWiseDemoPrivacyShield({
+            websocketUrl,
+            recordingLocale: demo.recording_locale,
+            onLocaleDiagnostic: recordLocaleDiagnostic,
+          }),
         assertPrivacyShield: async (websocketUrl, checkpoint) => {
           const result = await assertPrivacyShieldActive({
             websocketUrl,
             checkpoint,
             recordingLocale: demo.recording_locale,
+            onLocaleDiagnostic: recordLocaleDiagnostic,
           });
           privacyShieldCheckpoints.push(result);
           await failureDiagnostics.persistCheckpoint(result);
@@ -805,6 +818,7 @@ export const captureDirectedDemo = createServerFn({ method: "POST" })
             websocketUrl,
             recordingLocale: demo.recording_locale,
             registration,
+            onLocaleDiagnostic: recordLocaleDiagnostic,
           });
         },
         authenticate: credentials
@@ -815,6 +829,7 @@ export const captureDirectedDemo = createServerFn({ method: "POST" })
                 credentials,
                 recordingLocale: demo.recording_locale,
                 privacyShielded: true,
+                onLocaleDiagnostic: recordLocaleDiagnostic,
                 onPrivacyShieldCheckpoint: (result) => {
                   privacyShieldCheckpoints.push(result);
                   return failureDiagnostics.persistCheckpoint(result);
@@ -832,6 +847,7 @@ export const captureDirectedDemo = createServerFn({ method: "POST" })
           const audit = await withProductLocaleAdapterContext({
             websocketUrl,
             recordingLocale: demo.recording_locale,
+            onLocaleDiagnostic: recordLocaleDiagnostic,
             execute: (adapterContext) =>
               auditWiseResumeFixtureIsolationAccount(adapterContext, {
                 expectedAccountFingerprint,
@@ -866,6 +882,7 @@ export const captureDirectedDemo = createServerFn({ method: "POST" })
           const adapterPlan = await withProductLocaleAdapterContext({
             websocketUrl,
             recordingLocale: demo.recording_locale,
+            onLocaleDiagnostic: recordLocaleDiagnostic,
             execute: (adapterContext) =>
               prepareWiseResumeFixtureSmartTailoring(adapterContext, {
                 liveAccountSafetyAudit: liveAccountSafetyAudit as
@@ -878,6 +895,7 @@ export const captureDirectedDemo = createServerFn({ method: "POST" })
                       websocketUrl,
                       checkpoint,
                       recordingLocale: demo.recording_locale,
+                      onLocaleDiagnostic: recordLocaleDiagnostic,
                     }),
                   );
                   await failureDiagnostics.persistCheckpoint(privacyShieldCheckpoints.at(-1)!);
@@ -943,16 +961,33 @@ export const captureDirectedDemo = createServerFn({ method: "POST" })
         executeFinalTake: (websocketUrl, maxWallMs, preflight) =>
           runScenesOverCdp(websocketUrl, preflight.actions, maxWallMs, demo.recording_locale, {
             now: monotonicNow,
+            localeMode: "verify",
+            onLocaleDiagnostic: recordLocaleDiagnostic,
           }),
         verifyFinalTake: (websocketUrl, preflight) =>
           withProductLocaleAdapterContext({
             websocketUrl,
             recordingLocale: demo.recording_locale,
+            onLocaleDiagnostic: recordLocaleDiagnostic,
             execute: (adapterContext) =>
               verifyWiseResumeSmartTailoringTransformation(adapterContext, preflight.adapterPlan),
           }),
       });
       const preflight = capture.preflight;
+      await context.repository.createDirectorArtifact({
+        project_id: project.id,
+        demo_id: demo.id,
+        artifact_kind: "recording-locale-diagnostics",
+        cache_key: boundedArtifactCacheKey(briefArtifact.cache_key, "recording-locale-diagnostics"),
+        status: "ready",
+        payload_json: localeDiagnostics as unknown as Json,
+        expires_at: null,
+        provider: "wisedemo",
+        model: null,
+        duration_ms: null,
+        revision: 0,
+        failure_reason: null,
+      });
       await context.repository.createDirectorArtifact({
         project_id: project.id,
         demo_id: demo.id,
@@ -1139,6 +1174,27 @@ export const captureDirectedDemo = createServerFn({ method: "POST" })
             duration_ms: null,
             revision: 1,
             failure_reason: null,
+          })
+          .catch(() => undefined);
+      }
+      if (localeDiagnostics.length) {
+        await context.repository
+          .createDirectorArtifact({
+            project_id: project.id,
+            demo_id: demo.id,
+            artifact_kind: "recording-locale-diagnostics",
+            cache_key: boundedArtifactCacheKey(
+              briefArtifact.cache_key,
+              "recording-locale-diagnostics",
+            ),
+            status: "unavailable",
+            payload_json: localeDiagnostics as unknown as Json,
+            expires_at: null,
+            provider: "wisedemo",
+            model: null,
+            duration_ms: null,
+            revision: 1,
+            failure_reason: "recording-locale-initialization-failed",
           })
           .catch(() => undefined);
       }

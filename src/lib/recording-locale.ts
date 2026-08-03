@@ -4,6 +4,20 @@ export const recordingLocaleSchema = z.enum(["english", "arabic", "auto"]);
 
 export type RecordingLocale = z.infer<typeof recordingLocaleSchema>;
 
+export type RecordingLocaleDiagnostic = {
+  requestedCategory: RecordingLocale;
+  initializationMode: "initialize" | "verify";
+  result:
+    | "applied"
+    | "already-effective"
+    | "already-active-verified"
+    | "not-required"
+    | "conflict"
+    | "failed";
+  effectiveLocaleCategory: "english" | "arabic" | "other" | "unknown";
+  verified: boolean;
+};
+
 export const DEFAULT_RECORDING_LOCALE: RecordingLocale = "english";
 
 export type LocaleProfile = {
@@ -17,6 +31,15 @@ export function localeProfile(locale: RecordingLocale): LocaleProfile | null {
   return locale === "arabic"
     ? { locale: "ar_EG", acceptLanguage: "ar-EG,ar;q=0.9,en;q=0.5", languageCode: "ar" }
     : { locale: "en_US", acceptLanguage: "en-US,en;q=0.9", languageCode: "en" };
+}
+
+export function recordingLocaleCategory(
+  value: string | null | undefined,
+): RecordingLocaleDiagnostic["effectiveLocaleCategory"] {
+  if (!value) return "unknown";
+  if (/^en(?:[-_]|$)/i.test(value)) return "english";
+  if (/^ar(?:[-_]|$)/i.test(value)) return "arabic";
+  return "other";
 }
 
 export type ApplicationLocaleState = {
