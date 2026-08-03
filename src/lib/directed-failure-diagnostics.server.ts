@@ -238,6 +238,15 @@ export async function readDirectedFailureDiagnostics(
         confidence: asNumber(identity.confidence),
         mismatchCategory: safeMismatchCategory(asString(identity.mismatchCategory, 64)),
       },
+      inventoryEvidenceSources: Array.isArray(audit.inventoryEvidenceSources)
+        ? audit.inventoryEvidenceSources
+            .map((source) => {
+              const value = asString(source, 64);
+              return value && /^[a-z-]{1,64}$/.test(value) ? value : null;
+            })
+            .filter((source): source is string => source !== null)
+            .slice(0, 8)
+        : [],
       totalResumeCount: asNumber(audit.totalResumeCount),
       fixtureResumeCount: asNumber(audit.fixtureResumeCount),
       nonFixtureResumeCount: asNumber(audit.nonFixtureResumeCount),

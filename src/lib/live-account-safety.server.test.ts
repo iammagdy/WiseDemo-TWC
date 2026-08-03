@@ -56,9 +56,14 @@ test("unsafe, personal-data, and inconclusive audits reject mutation", () => {
 
 test("sanitized audit persistence excludes body and credential fields", () => {
   const serialized = JSON.stringify(
-    serializeLiveAccountSafetyAudit({ ...safeAudit, reasons: ["No visible non-fixture records."] }),
+    serializeLiveAccountSafetyAudit({
+      ...safeAudit,
+      inventoryEvidenceSources: ["create-resume-control"],
+      reasons: ["No visible non-fixture records."],
+    }),
   );
   assert.doesNotMatch(serialized, /resumeBody|username|password|credential|secret/i);
   assert.match(serialized, /"status":"safe"/);
   assert.match(serialized, /"identityEvidence"/);
+  assert.match(serialized, /"create-resume-control"/);
 });

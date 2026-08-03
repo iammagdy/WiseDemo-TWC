@@ -558,6 +558,7 @@ export type WiseResumeFixtureSmartTailoringPlan = WiseResumeSmartTailoringPlan &
 type WiseResumeFixtureInventoryFacts = {
   authenticatedAccountConfirmed: boolean;
   inventoryResolved: boolean;
+  inventoryEvidenceSources: string[];
   totalResumeCount: number;
   fixtureRecordIds: string[];
   privacyShieldActive: boolean;
@@ -673,10 +674,19 @@ export function wiseResumeFixtureInventoryExpression(): string {
         const marker = element.getAttribute("data-wisedemo-fixture") === "smart-tailoring" || String(element.textContent || "").includes(fixtureTitle);
         records.set(id, { fixture: current.fixture || marker });
       }
-      const inventoryResolved = records.size > 0 || Boolean(document.querySelector("[data-testid*=resume], [data-testid*=empty], [class*=resume], [data-resume-list], [aria-label='New Resume'], [aria-label*='Search resumes']"));
+      const inventoryEvidence = {
+        resumeWorkspaceRoute: /^\\/(?:dashboard|resumes?)(?:\\/|$)/i.test(location.pathname),
+        resumeListContainer: Boolean(document.querySelector("[data-resume-list], [data-testid*=resume], [class*=resume]")),
+        emptyStateControl: Boolean(document.querySelector("[data-testid*=empty]")),
+        createResumeControl: Boolean(document.querySelector("[aria-label='New Resume'], [aria-label*='Create resume'], [aria-label*='Add resume']")),
+        resumeSearchControl: Boolean(document.querySelector("[aria-label*='Search resumes']")),
+      };
+      const inventoryEvidenceSources = Object.entries(inventoryEvidence).filter(([, active]) => active).map(([source]) => source.replace(/[A-Z]/g, (letter) => "-" + letter.toLowerCase()));
+      const inventoryResolved = records.size > 0 || inventoryEvidenceSources.length > 0;
       return {
         authenticatedAccountConfirmed: false,
         inventoryResolved,
+        inventoryEvidenceSources,
         totalResumeCount: records.size,
         fixtureRecordIds: Array.from(records.entries()).filter(([, value]) => value.fixture).map(([id]) => id),
         privacyShieldActive: Boolean(document.getElementById("wisedemo-privacy-shield")),
@@ -691,12 +701,25 @@ async function readWiseResumeFixtureInventory(
   return {
     authenticatedAccountConfirmed: facts?.authenticatedAccountConfirmed === true,
     inventoryResolved: facts?.inventoryResolved === true,
+    inventoryEvidenceSources: Array.isArray(facts?.inventoryEvidenceSources)
+      ? facts.inventoryEvidenceSources.filter((value): value is string =>
+          /^[a-z-]{1,64}$/.test(value),
+        )
+      : [],
     totalResumeCount: typeof facts?.totalResumeCount === "number" ? facts.totalResumeCount : 0,
     fixtureRecordIds: Array.isArray(facts?.fixtureRecordIds)
       ? facts.fixtureRecordIds.filter((value): value is string => typeof value === "string")
       : [],
     privacyShieldActive: facts?.privacyShieldActive === true,
   };
+}
+
+async function waitForWiseResumeFixtureInventoryReadiness(
+  context: ProductLocaleAdapterContext,
+): Promise<void> {
+  await context
+    .waitUntil(`(${wiseResumeFixtureInventoryExpression()}).inventoryResolved === true`, 15_000)
+    .catch(() => false);
 }
 
 async function readWiseResumeAuthenticatedIdentity(
@@ -777,23 +800,36 @@ export async function auditWiseResumeFixtureIsolationAccount(
       auditedAt: new Date().toISOString(),
     };
   }
-  const facts = await readWiseResumeFixtureInventory(context);
   const identity = await readWiseResumeAuthenticatedIdentity(
     context,
     input.expectedAccountFingerprint,
     input.onIdentityAttempt,
   );
-  const audit = createWiseResumeFixtureIsolationAudit({
-    ...facts,
+  const shieldActive =
+    (await context.evaluate('Boolean(document.getElementById("wisedemo-privacy-shield"))')) ===
+    true;
+  const unresolvedFacts: WiseResumeFixtureInventoryFacts = {
+    authenticatedAccountConfirmed: false,
+    inventoryResolved: false,
+    inventoryEvidenceSources: [],
+    totalResumeCount: 0,
+    fixtureRecordIds: [],
+    privacyShieldActive: shieldActive,
+  };
+  const unresolvedAudit = createWiseResumeFixtureIsolationAudit({
+    ...unresolvedFacts,
     authenticatedAccountConfirmed: identity.authenticatedAccountConfirmed,
     storedFixture: input.storedFixture,
   });
-  if (!identity.sourceAvailable && audit.status !== "unsafe") {
+  if (!identity.sourceAvailable && unresolvedAudit.status !== "unsafe") {
     return {
-      ...audit,
+      ...unresolvedAudit,
       identityEvidence: identity,
       status: "inconclusive",
-      reasons: [...audit.reasons, "Authenticated account identity source was unavailable."],
+      reasons: [
+        ...unresolvedAudit.reasons,
+        "Authenticated account identity source was unavailable.",
+      ],
     };
   }
   if (identity.sourceAvailable && !identity.authenticatedAccountConfirmed) {
@@ -802,7 +838,7 @@ export async function auditWiseResumeFixtureIsolationAccount(
         ? "Authenticated account identity used a non-canonical fingerprint format."
         : "Authenticated account identity did not match the configured credential.";
     return {
-      ...audit,
+      ...unresolvedAudit,
       identityEvidence: identity,
       status: "unsafe",
       fixtureIsolated: false,
@@ -810,10 +846,18 @@ export async function auditWiseResumeFixtureIsolationAccount(
       reasons: [reason],
     };
   }
+  await waitForWiseResumeFixtureInventoryReadiness(context);
+  const facts = await readWiseResumeFixtureInventory(context);
+  const audit = createWiseResumeFixtureIsolationAudit({
+    ...facts,
+    authenticatedAccountConfirmed: identity.authenticatedAccountConfirmed,
+    storedFixture: input.storedFixture,
+  });
   if (!facts.inventoryResolved && audit.status === "safe") {
     return {
       ...audit,
       identityEvidence: identity,
+      inventoryEvidenceSources: facts.inventoryEvidenceSources,
       status: "inconclusive",
       reasons: ["Resume inventory could not be resolved."],
     };
@@ -835,7 +879,11 @@ export async function auditWiseResumeFixtureIsolationAccount(
       reasons: ["Persisted fixture scope does not match the authenticated account."],
     };
   }
-  return { ...audit, identityEvidence: identity };
+  return {
+    ...audit,
+    identityEvidence: identity,
+    inventoryEvidenceSources: facts.inventoryEvidenceSources,
+  };
 }
 
 async function executeWiseResumeShieldedNavigationAction(input: {

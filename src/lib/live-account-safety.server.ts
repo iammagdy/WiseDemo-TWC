@@ -7,6 +7,7 @@ export type LiveAccountSafetyAudit = {
   mode: "empty-account" | "fixture-isolation";
   authenticatedAccountConfirmed: boolean;
   identityEvidence?: WiseResumeIdentityEvidence;
+  inventoryEvidenceSources?: readonly string[];
   totalResumeCount: number;
   fixtureResumeCount: number;
   nonFixtureResumeCount: number;
@@ -90,6 +91,9 @@ export function serializeLiveAccountSafetyAudit(audit: LiveAccountSafetyAudit) {
           confidence: 0,
           mismatchCategory: "identity-source-unavailable",
         },
+    inventoryEvidenceSources: (audit.inventoryEvidenceSources ?? [])
+      .filter((source) => /^[a-z-]{1,64}$/.test(source))
+      .slice(0, 8),
     totalResumeCount: audit.totalResumeCount,
     fixtureResumeCount: audit.fixtureResumeCount,
     nonFixtureResumeCount: audit.nonFixtureResumeCount,

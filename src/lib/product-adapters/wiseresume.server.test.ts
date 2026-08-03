@@ -105,7 +105,7 @@ test("WiseResume inventory recognizes a settled resume workspace without reading
     anchor: new () => object,
     getComputedStyle: () => { display: string; visibility: string },
     location: { href: string },
-  ) => { inventoryResolved: boolean; totalResumeCount: number };
+  ) => { inventoryResolved: boolean; inventoryEvidenceSources: string[]; totalResumeCount: number };
   const inventory = evaluate(
     {
       querySelectorAll: () => [],
@@ -117,5 +117,6 @@ test("WiseResume inventory recognizes a settled resume workspace without reading
     { href: "https://example.test/dashboard" },
   );
   assert.equal(inventory.inventoryResolved, true);
+  assert.deepEqual(inventory.inventoryEvidenceSources, ["create-resume-control"]);
   assert.equal(inventory.totalResumeCount, 0);
 });
