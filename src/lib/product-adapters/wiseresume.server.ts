@@ -1178,6 +1178,17 @@ export async function prepareWiseResumeFixtureSmartTailoring(
   const { resume, jobPosting } = createWiseResumeFictionalState();
   let fixture = input.storedFixture;
   let route = await resolveWiseResumeFixtureRoute(context, fixture);
+  if (!fixture && !route.createSelector) {
+    await gotoWiseResumeFixtureWithShield({
+      context,
+      url: "https://wiseresume.app/dashboard",
+      waitMs: 1_200,
+      checkpointBefore: "before-fixture-dashboard-navigation",
+      checkpointAfter: "after-fixture-dashboard-navigation",
+      assertPrivacyShield: input.assertPrivacyShield,
+    });
+    route = await resolveWiseResumeFixtureRoute(context, null);
+  }
   let resumeUrl = route.resumeUrl;
   if (!fixture) {
     assertWiseResumeFixtureCreationAllowed(input.liveAccountSafetyAudit);

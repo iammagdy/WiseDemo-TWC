@@ -14,6 +14,7 @@ import {
 } from "./wiseresume-fixture-isolation.server.ts";
 import {
   evaluateWiseResumeFixtureViewportSafety,
+  prepareWiseResumeFixtureSmartTailoring,
   wiseResumeFixtureRouteExpression,
   wiseResumeFixtureWriteExpression,
 } from "./product-adapters/wiseresume.server.ts";
@@ -156,6 +157,13 @@ test("fixture route expression declares each helper before it is used", () => {
   assert.match(expression, /fixtureSelector/);
   assert.match(expression, /aria-label='New Resume'/);
   assert.doesNotMatch(expression, /username|password|credential|secret/i);
+});
+
+test("fixture preparation uses the verified dashboard only when a creation control is absent", () => {
+  const source = String(prepareWiseResumeFixtureSmartTailoring);
+  assert.match(source, /https:\/\/wiseresume\.app\/dashboard/);
+  assert.match(source, /before-fixture-dashboard-navigation/);
+  assert.match(source, /after-fixture-dashboard-navigation/);
 });
 
 test("fixture write expression writes a stable WiseDemo marker without account-wide fields", () => {
