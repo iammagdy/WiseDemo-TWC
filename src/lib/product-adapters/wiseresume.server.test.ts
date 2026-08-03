@@ -135,6 +135,7 @@ test("authoritative Appwrite inventory resolves a successful empty response", as
     source: "appwrite-resumes",
     sourceAvailable: true,
     inventoryResolved: true,
+    countEstablished: true,
     totalResumeCount: 0,
     fixtureRecordIds: [],
     requestStatus: "success",
@@ -265,6 +266,7 @@ test("the audit prefers resolved Appwrite inventory and cannot mutate before its
   );
   assert.equal(audit.status, "safe");
   assert.equal(audit.nonFixtureResumeCount, 2);
+  assert.equal(audit.inventoryRequestEvidence?.countEstablished, true);
   assert.deepEqual(audit.inventoryEvidenceSources, ["appwrite-resumes-success"]);
   assert.equal(
     evaluations.some((expression) => expression.includes("resume-workspace-card")),
@@ -323,6 +325,7 @@ test("failed authoritative inventory leaves the audit inconclusive with an unkno
     source: "appwrite-resumes",
     sourceAvailable: true,
     inventoryResolved: false,
+    countEstablished: false,
     requestStatus: "invalid-query",
     httpStatusClass: "4xx",
     domFallbackResolved: true,
@@ -347,6 +350,7 @@ for (const [status, requestStatus] of [
       source: "appwrite-resumes",
       sourceAvailable: true,
       inventoryResolved: false,
+      countEstablished: false,
       totalResumeCount: null,
       fixtureRecordIds: [],
       requestStatus,

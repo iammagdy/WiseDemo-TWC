@@ -273,6 +273,7 @@ export async function readDirectedFailureDiagnostics(
           asString(inventoryRequest.source, 64) === "appwrite-resumes" ? "appwrite-resumes" : null,
         sourceAvailable: asBoolean(inventoryRequest.sourceAvailable),
         inventoryResolved: asBoolean(inventoryRequest.inventoryResolved),
+        countEstablished: asBoolean(inventoryRequest.countEstablished),
         requestStatus: safeInventoryRequestStatus(asString(inventoryRequest.requestStatus, 64)),
         httpStatusClass: safeInventoryHttpStatusClass(
           asString(inventoryRequest.httpStatusClass, 16),

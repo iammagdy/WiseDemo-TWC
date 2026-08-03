@@ -154,6 +154,7 @@ test("fixture route expression declares each helper before it is used", () => {
   );
   assert.ok(expression.indexOf("const cssPath") < expression.indexOf("cssPath(create)"));
   assert.match(expression, /fixtureSelector/);
+  assert.match(expression, /aria-label='New Resume'/);
   assert.doesNotMatch(expression, /username|password|credential|secret/i);
 });
 

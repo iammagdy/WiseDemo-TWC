@@ -12,6 +12,7 @@ export type LiveAccountSafetyAudit = {
     source: "appwrite-resumes";
     sourceAvailable: boolean;
     inventoryResolved: boolean;
+    countEstablished: boolean;
     requestStatus:
       | "success"
       | "unauthorized"
@@ -116,6 +117,7 @@ export function serializeLiveAccountSafetyAudit(audit: LiveAccountSafetyAudit) {
           source: "appwrite-resumes",
           sourceAvailable: audit.inventoryRequestEvidence.sourceAvailable,
           inventoryResolved: audit.inventoryRequestEvidence.inventoryResolved,
+          countEstablished: audit.inventoryRequestEvidence.countEstablished,
           requestStatus: audit.inventoryRequestEvidence.requestStatus,
           httpStatusClass: audit.inventoryRequestEvidence.httpStatusClass,
           domFallbackResolved: audit.inventoryRequestEvidence.domFallbackResolved,

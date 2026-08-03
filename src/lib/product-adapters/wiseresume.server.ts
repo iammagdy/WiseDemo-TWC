@@ -578,6 +578,7 @@ export type WiseResumeInventoryEvidence = {
   source: "appwrite-resumes";
   sourceAvailable: boolean;
   inventoryResolved: boolean;
+  countEstablished: boolean;
   totalResumeCount: number | null;
   fixtureRecordIds: string[];
   requestStatus: WiseResumeInventoryRequestStatus;
@@ -600,7 +601,7 @@ export function wiseResumeFixtureRouteExpression(fixtureRecordId: string | null)
     const fixtureEntry = expectedId ? entries.find((entry) => entry.id === expectedId) : entries.find((entry) => elementText(entry.element).includes(fixtureTitle));
     const href = fixtureEntry?.element instanceof HTMLAnchorElement ? fixtureEntry.element.href : fixtureEntry?.element.getAttribute("href");
     const controls = Array.from(document.querySelectorAll("button, a[href], [role=button]"));
-    const create = controls.find((element) => /create.*resume|new.*resume|add.*resume/i.test(elementText(element) + " " + String(element.getAttribute("aria-label") || "")));
+    const create = controls.find((element) => /create.*resume|new.*resume|add.*resume/i.test(elementText(element) + " " + String(element.getAttribute("aria-label") || ""))) || document.querySelector("[aria-label='New Resume'], [aria-label='Create Resume'], [data-testid='create-resume']");
     return {
       origin: location.origin,
       resumeUrl: href || null,
@@ -678,7 +679,7 @@ export function wiseResumeAuthoritativeInventoryExpression(
       const storedFixtureRecordId = ${JSON.stringify(storedFixtureRecordId)};
       ${wiseResumeWebSdkQueryRuntimeSource()}
       const requestHeaders = ${JSON.stringify(wiseResumeWebSdkHeaders())};
-      const failed = (requestStatus, httpStatusClass, sourceAvailable) => ({ source: "appwrite-resumes", sourceAvailable, inventoryResolved: false, totalResumeCount: null, fixtureRecordIds: [], requestStatus, httpStatusClass });
+      const failed = (requestStatus, httpStatusClass, sourceAvailable) => ({ source: "appwrite-resumes", sourceAvailable, inventoryResolved: false, countEstablished: false, totalResumeCount: null, fixtureRecordIds: [], requestStatus, httpStatusClass });
       const classify = (status) => {
         if (status === 400) return ["invalid-query", "4xx"];
         if (status === 401) return ["unauthorized", "4xx"];
@@ -711,7 +712,7 @@ export function wiseResumeAuthoritativeInventoryExpression(
         documents.length = 0;
         if (records.some((record) => !record.id || !record.updatedAtPresent)) return failed("invalid-response", "2xx", true);
         const fixtureRecordIds = records.filter((record) => record.id === storedFixtureRecordId || record.titleMarkerMatch).map((record) => record.id);
-        return { source: "appwrite-resumes", sourceAvailable: true, inventoryResolved: true, totalResumeCount: records.length, fixtureRecordIds, requestStatus: "success", httpStatusClass: "2xx" };
+        return { source: "appwrite-resumes", sourceAvailable: true, inventoryResolved: true, countEstablished: true, totalResumeCount: records.length, fixtureRecordIds, requestStatus: "success", httpStatusClass: "2xx" };
       } catch { return failed("network-error", "network", false); }
     })()`;
 }
@@ -953,6 +954,8 @@ export async function auditWiseResumeFixtureIsolationAccount(
     source: "appwrite-resumes" as const,
     sourceAvailable: facts.authoritativeRequestStatus !== "network-error",
     inventoryResolved: facts.authoritativeRequestStatus === "success" && facts.inventoryResolved,
+    countEstablished:
+      facts.authoritativeRequestStatus === "success" && typeof facts.totalResumeCount === "number",
     requestStatus: facts.authoritativeRequestStatus,
     httpStatusClass: facts.authoritativeHttpStatusClass,
     domFallbackResolved: facts.domFallbackResolved,
