@@ -78,9 +78,17 @@ test("directed failure diagnostics retain safe audit, checkpoint, identity, and 
                 confidence: 0,
                 mismatchCategory: "identity-source-unavailable",
               },
-              totalResumeCount: 0,
-              fixtureResumeCount: 0,
-              nonFixtureResumeCount: 0,
+              inventoryRequestEvidence: {
+                source: "appwrite-resumes",
+                sourceAvailable: true,
+                inventoryResolved: false,
+                requestStatus: "invalid-query",
+                httpStatusClass: "4xx",
+                domFallbackResolved: false,
+              },
+              totalResumeCount: null,
+              fixtureResumeCount: null,
+              nonFixtureResumeCount: null,
               fixtureIsolated: false,
               privacyShieldActive: true,
               mutationScopeLockedToFixture: false,
@@ -169,6 +177,14 @@ test("directed failure diagnostics retain safe audit, checkpoint, identity, and 
   assert.equal(diagnostics.audit.status, "inconclusive");
   assert.equal(diagnostics.audit.identityEvidence.sourceAvailable, false);
   assert.equal(diagnostics.audit.identityEvidence.mismatchCategory, "identity-source-unavailable");
+  assert.deepEqual(diagnostics.audit.inventoryRequestEvidence, {
+    source: "appwrite-resumes",
+    sourceAvailable: true,
+    inventoryResolved: false,
+    requestStatus: "invalid-query",
+    httpStatusClass: "4xx",
+    domFallbackResolved: false,
+  });
   assert.equal(diagnostics.checkpoints.items.length, 2);
   assert.deepEqual(
     diagnostics.identityAttempts.map((attempt) => attempt.source),

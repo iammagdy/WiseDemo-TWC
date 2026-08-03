@@ -8,9 +8,26 @@ export type LiveAccountSafetyAudit = {
   authenticatedAccountConfirmed: boolean;
   identityEvidence?: WiseResumeIdentityEvidence;
   inventoryEvidenceSources?: readonly string[];
-  totalResumeCount: number;
-  fixtureResumeCount: number;
-  nonFixtureResumeCount: number;
+  inventoryRequestEvidence?: {
+    source: "appwrite-resumes";
+    sourceAvailable: boolean;
+    inventoryResolved: boolean;
+    requestStatus:
+      | "success"
+      | "unauthorized"
+      | "forbidden"
+      | "invalid-query"
+      | "not-found"
+      | "rate-limited"
+      | "server-error"
+      | "network-error"
+      | "invalid-response";
+    httpStatusClass: "2xx" | "4xx" | "5xx" | "network" | "unknown";
+    domFallbackResolved: boolean | null;
+  };
+  totalResumeCount: number | null;
+  fixtureResumeCount: number | null;
+  nonFixtureResumeCount: number | null;
   fixtureIsolated: boolean;
   privacyShieldActive: boolean;
   mutationScopeLockedToFixture: boolean;
@@ -57,9 +74,9 @@ export function assertLiveAccountMutationAllowed(
         status: "inconclusive",
         mode: "fixture-isolation",
         authenticatedAccountConfirmed: false,
-        totalResumeCount: 0,
-        fixtureResumeCount: 0,
-        nonFixtureResumeCount: 0,
+        totalResumeCount: null,
+        fixtureResumeCount: null,
+        nonFixtureResumeCount: null,
         fixtureIsolated: false,
         privacyShieldActive: false,
         mutationScopeLockedToFixture: false,
@@ -94,6 +111,16 @@ export function serializeLiveAccountSafetyAudit(audit: LiveAccountSafetyAudit) {
     inventoryEvidenceSources: (audit.inventoryEvidenceSources ?? [])
       .filter((source) => /^[a-z-]{1,64}$/.test(source))
       .slice(0, 8),
+    inventoryRequestEvidence: audit.inventoryRequestEvidence
+      ? {
+          source: "appwrite-resumes",
+          sourceAvailable: audit.inventoryRequestEvidence.sourceAvailable,
+          inventoryResolved: audit.inventoryRequestEvidence.inventoryResolved,
+          requestStatus: audit.inventoryRequestEvidence.requestStatus,
+          httpStatusClass: audit.inventoryRequestEvidence.httpStatusClass,
+          domFallbackResolved: audit.inventoryRequestEvidence.domFallbackResolved,
+        }
+      : null,
     totalResumeCount: audit.totalResumeCount,
     fixtureResumeCount: audit.fixtureResumeCount,
     nonFixtureResumeCount: audit.nonFixtureResumeCount,

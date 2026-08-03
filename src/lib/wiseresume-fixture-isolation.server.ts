@@ -32,7 +32,7 @@ export type WiseResumeFinalVisibleSafety = {
 
 export type WiseResumeFixtureInventory = {
   authenticatedAccountConfirmed: boolean;
-  totalResumeCount: number;
+  totalResumeCount: number | null;
   fixtureRecordIds: readonly string[];
   storedFixture?: WiseResumeFixtureReference | null;
   privacyShieldActive: boolean;
@@ -135,9 +135,13 @@ export function createWiseResumeFixtureIsolationAudit(
   input: WiseResumeFixtureInventory,
 ): LiveAccountSafetyAudit {
   const fixtureRecordIds = [...new Set(input.fixtureRecordIds.filter(Boolean))];
-  const totalResumeCount = Math.max(0, Math.trunc(input.totalResumeCount));
+  const totalResumeCount =
+    typeof input.totalResumeCount === "number"
+      ? Math.max(0, Math.trunc(input.totalResumeCount))
+      : null;
   const fixtureResumeCount = fixtureRecordIds.length;
-  const nonFixtureResumeCount = Math.max(0, totalResumeCount - fixtureResumeCount);
+  const nonFixtureResumeCount =
+    totalResumeCount === null ? null : Math.max(0, totalResumeCount - fixtureResumeCount);
   const storedFixture = input.storedFixture ?? null;
   const fixtureAmbiguous = fixtureResumeCount > 1;
   const storedFixtureMissing =
@@ -149,7 +153,7 @@ export function createWiseResumeFixtureIsolationAudit(
     reasons.push("The privacy shield was not active before account inspection.");
   if (fixtureAmbiguous) reasons.push("The WiseDemo fixture could not be uniquely identified.");
   if (storedFixtureMissing) reasons.push("The persisted WiseDemo fixture could not be resolved.");
-  if (nonFixtureResumeCount > 0)
+  if (nonFixtureResumeCount !== null && nonFixtureResumeCount > 0)
     reasons.push("Existing resumes coexist outside the isolated WiseDemo fixture.");
   return {
     status:
@@ -158,7 +162,10 @@ export function createWiseResumeFixtureIsolationAudit(
         : !input.authenticatedAccountConfirmed || storedFixtureMissing
           ? "inconclusive"
           : "safe",
-    mode: nonFixtureResumeCount > 0 ? "fixture-isolation" : "empty-account",
+    mode:
+      nonFixtureResumeCount !== null && nonFixtureResumeCount > 0
+        ? "fixture-isolation"
+        : "empty-account",
     authenticatedAccountConfirmed: input.authenticatedAccountConfirmed,
     totalResumeCount,
     fixtureResumeCount,

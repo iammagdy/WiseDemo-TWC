@@ -16,6 +16,12 @@ import {
   type WiseResumeSmartTailoringPlan,
 } from "./wiseresume.server.ts";
 import { wiseResumeAccountFingerprint } from "../wiseresume-fixture-isolation.server.ts";
+import {
+  WISE_RESUME_RESPONSE_FORMAT,
+  classifyWiseResumeInventoryHttpStatus,
+  wiseResumeInventoryQueries,
+  wiseResumeWebSdkHeaders,
+} from "../wiseresume-appwrite-query.server.ts";
 
 const orderedOperations = [
   "ensure-resume",
@@ -132,11 +138,23 @@ test("authoritative Appwrite inventory resolves a successful empty response", as
     totalResumeCount: 0,
     fixtureRecordIds: [],
     requestStatus: "success",
+    httpStatusClass: "2xx",
   });
   assert.match(requests[1]!.url, /databases\/main\/collections\/resumes\/documents/);
-  assert.match(decodeURIComponent(requests[1]!.url), /equal\("user_id",\["mock-user"\]\)/);
+  const queryValues = new URL(requests[1]!.url).searchParams;
+  assert.deepEqual(
+    [queryValues.get("queries[0]"), queryValues.get("queries[1]"), queryValues.get("queries[2]")],
+    wiseResumeInventoryQueries("mock-user"),
+  );
+  assert.equal(queryValues.getAll("queries[]").length, 0);
   assert.equal(requests[0]!.init?.credentials, "include");
   assert.equal(requests[1]!.init?.credentials, "include");
+  assert.equal(
+    (requests[1]!.init?.headers as Record<string, string>)["X-Appwrite-Response-Format"],
+    WISE_RESUME_RESPONSE_FORMAT,
+  );
+  assert.deepEqual(requests[1]!.init?.headers, wiseResumeWebSdkHeaders());
+  assert.equal("X-Appwrite-Key" in (requests[1]!.init?.headers as Record<string, string>), false);
 });
 
 test("authoritative Appwrite inventory retains only fixture metadata", async () => {
@@ -230,6 +248,7 @@ test("the audit prefers resolved Appwrite inventory and cannot mutate before its
             totalResumeCount: 2,
             fixtureRecordIds: [],
             requestStatus: "success",
+            httpStatusClass: "2xx",
           };
         }
         throw new Error("Unexpected browser evaluation.");
@@ -253,26 +272,94 @@ test("the audit prefers resolved Appwrite inventory and cannot mutate before its
   );
 });
 
-for (const [status, label] of [
-  [401, "401"],
-  [403, "403"],
+test("failed authoritative inventory leaves the audit inconclusive with an unknown count", async () => {
+  const expectedAccountFingerprint = wiseResumeAccountFingerprint("mock-user");
+  const audit = await auditWiseResumeFixtureIsolationAccount(
+    {
+      evaluate: async (expression) => {
+        if (expression === "location.hostname") return "wiseresume.app";
+        if (expression.includes("liveAccountFingerprint")) {
+          return { sourceAvailable: true, liveAccountFingerprint: expectedAccountFingerprint };
+        }
+        if (expression.includes("storedFixtureRecordId")) {
+          return {
+            source: "appwrite-resumes",
+            sourceAvailable: true,
+            inventoryResolved: false,
+            totalResumeCount: null,
+            fixtureRecordIds: [],
+            requestStatus: "invalid-query",
+            httpStatusClass: "4xx",
+          };
+        }
+        if (expression.includes("resume-workspace-row")) {
+          return {
+            authenticatedAccountConfirmed: false,
+            inventoryResolved: true,
+            inventoryEvidenceSources: ["empty-state"],
+            countEstablished: true,
+            totalResumeCount: 0,
+            fixtureRecordIds: [],
+            privacyShieldActive: true,
+          };
+        }
+        if (expression.includes("wisedemo-privacy-shield")) return true;
+        throw new Error("Unexpected browser evaluation.");
+      },
+      delay: async () => undefined,
+      waitUntil: async () => true,
+      goto: async () => undefined,
+    },
+    {
+      expectedAccountFingerprint,
+      legacyExpectedAccountFingerprint: "legacy-not-used",
+      storedFixture: null,
+    },
+  );
+  assert.equal(audit.status, "inconclusive");
+  assert.equal(audit.totalResumeCount, null);
+  assert.equal(audit.nonFixtureResumeCount, null);
+  assert.deepEqual(audit.inventoryRequestEvidence, {
+    source: "appwrite-resumes",
+    sourceAvailable: true,
+    inventoryResolved: false,
+    requestStatus: "invalid-query",
+    httpStatusClass: "4xx",
+    domFallbackResolved: true,
+  });
+  assert.deepEqual(audit.inventoryEvidenceSources, [
+    "appwrite-resumes-invalid-query",
+    "dom-fallback-empty-state",
+  ]);
+});
+
+for (const [status, requestStatus] of [
+  [400, "invalid-query"],
+  [401, "unauthorized"],
+  [403, "forbidden"],
+  [404, "not-found"],
+  [429, "rate-limited"],
+  [500, "server-error"],
 ] as const) {
-  test(`authoritative inventory treats ${label} as inconclusive`, async () => {
+  test(`authoritative inventory classifies HTTP ${status} without a false zero`, async () => {
     const { evidence } = await evaluateAuthoritativeInventory(response(status, {}));
     assert.deepEqual(evidence, {
       source: "appwrite-resumes",
-      sourceAvailable: false,
+      sourceAvailable: true,
       inventoryResolved: false,
-      totalResumeCount: 0,
+      totalResumeCount: null,
       fixtureRecordIds: [],
-      requestStatus: "forbidden",
+      requestStatus,
+      httpStatusClass: status >= 500 ? "5xx" : "4xx",
     });
+    assert.equal(classifyWiseResumeInventoryHttpStatus(status).requestStatus, requestStatus);
   });
 }
 
 test("authoritative inventory treats network and invalid responses as inconclusive", async () => {
   const invalid = await evaluateAuthoritativeInventory(response(200, { unexpected: true }));
-  assert.equal((invalid.evidence as { requestStatus: string }).requestStatus, "invalid");
+  assert.equal((invalid.evidence as { requestStatus: string }).requestStatus, "invalid-response");
+  assert.equal((invalid.evidence as { totalResumeCount: number | null }).totalResumeCount, null);
   const AsyncFunction = Object.getPrototypeOf(async () => undefined).constructor as new (
     ...args: string[]
   ) => (...args: unknown[]) => Promise<unknown>;
@@ -284,7 +371,7 @@ test("authoritative inventory treats network and invalid responses as inconclusi
   const unavailable = await evaluate(async () => {
     throw new Error("offline");
   }, URLSearchParams);
-  assert.equal((unavailable as { requestStatus: string }).requestStatus, "unavailable");
+  assert.equal((unavailable as { requestStatus: string }).requestStatus, "network-error");
 });
 
 test("scoped DOM fallback recognizes settled workspace without reading card text", () => {

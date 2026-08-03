@@ -1,6 +1,13 @@
 import type { RecordingLocale } from "../recording-locale";
 import type { CdpAction } from "../steel-recorder.server";
 import {
+  WISE_RESUME_APPWRITE_ENDPOINT,
+  wiseResumeWebSdkHeaders,
+  wiseResumeWebSdkQueryRuntimeSource,
+  type WiseResumeHttpStatusClass,
+  type WiseResumeInventoryRequestStatus,
+} from "../wiseresume-appwrite-query.server.ts";
+import {
   assertLiveAccountMutationAllowed,
   type LiveAccountSafetyAudit,
 } from "../live-account-safety.server.ts";
@@ -226,9 +233,9 @@ export async function auditWiseResumeLiveAccount(
       status: "inconclusive",
       mode: "fixture-isolation",
       authenticatedAccountConfirmed: false,
-      totalResumeCount: 0,
-      fixtureResumeCount: 0,
-      nonFixtureResumeCount: 0,
+      totalResumeCount: null,
+      fixtureResumeCount: null,
+      nonFixtureResumeCount: null,
       fixtureIsolated: false,
       privacyShieldActive: false,
       mutationScopeLockedToFixture: false,
@@ -559,22 +566,23 @@ type WiseResumeFixtureInventoryFacts = {
   authenticatedAccountConfirmed: boolean;
   inventoryResolved: boolean;
   inventoryEvidenceSources: string[];
-  totalResumeCount: number;
+  totalResumeCount: number | null;
   fixtureRecordIds: string[];
   privacyShieldActive: boolean;
+  authoritativeRequestStatus: WiseResumeInventoryRequestStatus;
+  authoritativeHttpStatusClass: WiseResumeHttpStatusClass;
+  domFallbackResolved: boolean | null;
 };
 
 export type WiseResumeInventoryEvidence = {
   source: "appwrite-resumes";
   sourceAvailable: boolean;
   inventoryResolved: boolean;
-  totalResumeCount: number;
+  totalResumeCount: number | null;
   fixtureRecordIds: string[];
-  requestStatus: "success" | "unavailable" | "forbidden" | "invalid";
+  requestStatus: WiseResumeInventoryRequestStatus;
+  httpStatusClass: WiseResumeHttpStatusClass;
 };
-
-const wiseResumeAppwriteEndpoint = "https://fra.cloud.appwrite.io/v1";
-const wiseResumeAppwriteProjectId = "69fd362b001eb325a192";
 
 export function wiseResumeFixtureRouteExpression(fixtureRecordId: string | null): string {
   return `(() => {
@@ -668,24 +676,31 @@ export function wiseResumeAuthoritativeInventoryExpression(
   return `(async () => {
       const fixtureTitle = ${JSON.stringify(WISE_RESUME_FIXTURE_TITLE)};
       const storedFixtureRecordId = ${JSON.stringify(storedFixtureRecordId)};
-      const unavailable = (requestStatus) => ({ source: "appwrite-resumes", sourceAvailable: false, inventoryResolved: false, totalResumeCount: 0, fixtureRecordIds: [], requestStatus });
+      ${wiseResumeWebSdkQueryRuntimeSource()}
+      const requestHeaders = ${JSON.stringify(wiseResumeWebSdkHeaders())};
+      const failed = (requestStatus, httpStatusClass, sourceAvailable) => ({ source: "appwrite-resumes", sourceAvailable, inventoryResolved: false, totalResumeCount: null, fixtureRecordIds: [], requestStatus, httpStatusClass });
+      const classify = (status) => {
+        if (status === 400) return ["invalid-query", "4xx"];
+        if (status === 401) return ["unauthorized", "4xx"];
+        if (status === 403) return ["forbidden", "4xx"];
+        if (status === 404) return ["not-found", "4xx"];
+        if (status === 429) return ["rate-limited", "4xx"];
+        if (status >= 500 && status < 600) return ["server-error", "5xx"];
+        return ["invalid-query", status >= 400 ? "4xx" : "unknown"];
+      };
       try {
-        const accountResponse = await fetch(${JSON.stringify(`${wiseResumeAppwriteEndpoint}/account`)}, { credentials: "include", headers: { "X-Appwrite-Project": ${JSON.stringify(wiseResumeAppwriteProjectId)} } });
-        if (accountResponse.status === 401 || accountResponse.status === 403) return unavailable("forbidden");
-        if (!accountResponse.ok) return unavailable("unavailable");
+        const accountResponse = await fetch(${JSON.stringify(`${WISE_RESUME_APPWRITE_ENDPOINT}/account`)}, { method: "GET", credentials: "include", headers: requestHeaders });
+        if (!accountResponse.ok) { const [requestStatus, httpStatusClass] = classify(accountResponse.status); return failed(requestStatus, httpStatusClass, true); }
         let account = await accountResponse.json();
         const authenticatedUserId = typeof account?.$id === "string" ? account.$id : null;
-        if (!authenticatedUserId) return unavailable("invalid");
+        if (!authenticatedUserId) return failed("invalid-response", "2xx", true);
         account = null;
         const params = new URLSearchParams();
-        params.append("queries[]", 'equal("user_id",[' + JSON.stringify(authenticatedUserId) + '])');
-        params.append("queries[]", 'orderDesc("$updatedAt")');
-        params.append("queries[]", "limit(50)");
-        const inventoryResponse = await fetch(${JSON.stringify(`${wiseResumeAppwriteEndpoint}/databases/main/collections/resumes/documents`)} + "?" + params.toString(), { credentials: "include", headers: { "X-Appwrite-Project": ${JSON.stringify(wiseResumeAppwriteProjectId)} } });
-        if (inventoryResponse.status === 401 || inventoryResponse.status === 403) return unavailable("forbidden");
-        if (!inventoryResponse.ok) return unavailable("unavailable");
+        [sdkQuery("equal", "user_id", [authenticatedUserId]), sdkQuery("orderDesc", "$updatedAt"), sdkQuery("limit", undefined, 50)].forEach((query, index) => params.append("queries[" + index + "]", query));
+        const inventoryResponse = await fetch(${JSON.stringify(`${WISE_RESUME_APPWRITE_ENDPOINT}/databases/main/collections/resumes/documents`)} + "?" + params.toString(), { method: "GET", credentials: "include", headers: requestHeaders });
+        if (!inventoryResponse.ok) { const [requestStatus, httpStatusClass] = classify(inventoryResponse.status); return failed(requestStatus, httpStatusClass, true); }
         let payload = await inventoryResponse.json();
-        if (!payload || !Array.isArray(payload.documents)) return unavailable("invalid");
+        if (!payload || !Array.isArray(payload.documents)) return failed("invalid-response", "2xx", true);
         const documents = payload.documents;
         const records = documents.map((document) => ({
           id: typeof document?.$id === "string" ? document.$id : null,
@@ -694,10 +709,10 @@ export function wiseResumeAuthoritativeInventoryExpression(
         }));
         payload = null;
         documents.length = 0;
-        if (records.some((record) => !record.id || !record.updatedAtPresent)) return unavailable("invalid");
+        if (records.some((record) => !record.id || !record.updatedAtPresent)) return failed("invalid-response", "2xx", true);
         const fixtureRecordIds = records.filter((record) => record.id === storedFixtureRecordId || record.titleMarkerMatch).map((record) => record.id);
-        return { source: "appwrite-resumes", sourceAvailable: true, inventoryResolved: true, totalResumeCount: records.length, fixtureRecordIds, requestStatus: "success" };
-      } catch { return unavailable("unavailable"); }
+        return { source: "appwrite-resumes", sourceAvailable: true, inventoryResolved: true, totalResumeCount: records.length, fixtureRecordIds, requestStatus: "success", httpStatusClass: "2xx" };
+      } catch { return failed("network-error", "network", false); }
     })()`;
 }
 
@@ -714,6 +729,8 @@ export function wiseResumeFixtureInventoryExpression(): string {
         authenticatedAccountConfirmed: false,
         inventoryResolved: inventoryEvidenceSources.length > 0,
         inventoryEvidenceSources,
+        countEstablished:
+          inventoryEvidence.emptyState || inventoryEvidence.resumeWorkspaceRow || inventoryEvidence.resumeWorkspaceCard,
         totalResumeCount: document.querySelectorAll(".resume-workspace-row, .resume-workspace-card").length,
         fixtureRecordIds: [],
         privacyShieldActive: Boolean(document.getElementById("wisedemo-privacy-shield")),
@@ -729,13 +746,14 @@ async function readWiseResumeFixtureInventory(
     await context.evaluate(wiseResumeAuthoritativeInventoryExpression(storedFixtureRecordId)),
   );
   const requestStatus = asString(authoritative?.requestStatus);
-  if (authoritative?.source === "appwrite-resumes" && requestStatus !== "unavailable") {
+  const authoritativeHttpStatusClass = asString(authoritative?.httpStatusClass);
+  if (authoritative?.source === "appwrite-resumes" && requestStatus === "success") {
     return {
       authenticatedAccountConfirmed: false,
-      inventoryResolved: authoritative.inventoryResolved === true,
-      inventoryEvidenceSources: [`appwrite-resumes-${requestStatus ?? "invalid"}`],
+      inventoryResolved: true,
+      inventoryEvidenceSources: ["appwrite-resumes-success"],
       totalResumeCount:
-        typeof authoritative.totalResumeCount === "number" ? authoritative.totalResumeCount : 0,
+        typeof authoritative.totalResumeCount === "number" ? authoritative.totalResumeCount : null,
       fixtureRecordIds: Array.isArray(authoritative.fixtureRecordIds)
         ? authoritative.fixtureRecordIds.filter(
             (value): value is string => typeof value === "string",
@@ -744,25 +762,54 @@ async function readWiseResumeFixtureInventory(
       privacyShieldActive:
         (await context.evaluate('Boolean(document.getElementById("wisedemo-privacy-shield"))')) ===
         true,
+      authoritativeRequestStatus: "success",
+      authoritativeHttpStatusClass: "2xx",
+      domFallbackResolved: null,
     };
   }
   const facts = asRecord(await context.evaluate(wiseResumeFixtureInventoryExpression()));
+  const fallbackSources = Array.isArray(facts?.inventoryEvidenceSources)
+    ? facts.inventoryEvidenceSources.filter((value): value is string =>
+        /^[a-z-]{1,64}$/.test(value),
+      )
+    : [];
+  const fallbackResolved = facts?.inventoryResolved === true;
+  const safeRequestStatus: WiseResumeInventoryRequestStatus =
+    requestStatus === "unauthorized" ||
+    requestStatus === "forbidden" ||
+    requestStatus === "invalid-query" ||
+    requestStatus === "not-found" ||
+    requestStatus === "rate-limited" ||
+    requestStatus === "server-error" ||
+    requestStatus === "network-error" ||
+    requestStatus === "invalid-response"
+      ? requestStatus
+      : "invalid-response";
+  const safeHttpStatusClass: WiseResumeHttpStatusClass =
+    authoritativeHttpStatusClass === "2xx" ||
+    authoritativeHttpStatusClass === "4xx" ||
+    authoritativeHttpStatusClass === "5xx" ||
+    authoritativeHttpStatusClass === "network" ||
+    authoritativeHttpStatusClass === "unknown"
+      ? authoritativeHttpStatusClass
+      : "unknown";
   return {
     authenticatedAccountConfirmed: facts?.authenticatedAccountConfirmed === true,
-    inventoryResolved: facts?.inventoryResolved === true,
+    inventoryResolved: fallbackResolved,
     inventoryEvidenceSources: [
-      "appwrite-resumes-unavailable",
-      ...(Array.isArray(facts?.inventoryEvidenceSources)
-        ? facts.inventoryEvidenceSources.filter((value): value is string =>
-            /^[a-z-]{1,64}$/.test(value),
-          )
-        : []),
+      `appwrite-resumes-${safeRequestStatus}`,
+      ...(fallbackSources.length
+        ? fallbackSources.map((source) => `dom-fallback-${source}`)
+        : ["dom-fallback-unresolved"]),
     ],
-    totalResumeCount: typeof facts?.totalResumeCount === "number" ? facts.totalResumeCount : 0,
+    totalResumeCount: null,
     fixtureRecordIds: Array.isArray(facts?.fixtureRecordIds)
       ? facts.fixtureRecordIds.filter((value): value is string => typeof value === "string")
       : [],
     privacyShieldActive: facts?.privacyShieldActive === true,
+    authoritativeRequestStatus: safeRequestStatus,
+    authoritativeHttpStatusClass: safeHttpStatusClass,
+    domFallbackResolved: fallbackResolved,
   };
 }
 
@@ -833,9 +880,9 @@ export async function auditWiseResumeFixtureIsolationAccount(
       status: "inconclusive",
       mode: "fixture-isolation",
       authenticatedAccountConfirmed: false,
-      totalResumeCount: 0,
-      fixtureResumeCount: 0,
-      nonFixtureResumeCount: 0,
+      totalResumeCount: null,
+      fixtureResumeCount: null,
+      nonFixtureResumeCount: null,
       fixtureIsolated: false,
       privacyShieldActive: false,
       mutationScopeLockedToFixture: false,
@@ -856,9 +903,12 @@ export async function auditWiseResumeFixtureIsolationAccount(
     authenticatedAccountConfirmed: false,
     inventoryResolved: false,
     inventoryEvidenceSources: [],
-    totalResumeCount: 0,
+    totalResumeCount: null,
     fixtureRecordIds: [],
     privacyShieldActive: shieldActive,
+    authoritativeRequestStatus: "invalid-response",
+    authoritativeHttpStatusClass: "unknown",
+    domFallbackResolved: null,
   };
   const unresolvedAudit = createWiseResumeFixtureIsolationAudit({
     ...unresolvedFacts,
@@ -899,11 +949,30 @@ export async function auditWiseResumeFixtureIsolationAccount(
     authenticatedAccountConfirmed: identity.authenticatedAccountConfirmed,
     storedFixture: input.storedFixture,
   });
+  const inventoryRequestEvidence = {
+    source: "appwrite-resumes" as const,
+    sourceAvailable: facts.authoritativeRequestStatus !== "network-error",
+    inventoryResolved: facts.authoritativeRequestStatus === "success" && facts.inventoryResolved,
+    requestStatus: facts.authoritativeRequestStatus,
+    httpStatusClass: facts.authoritativeHttpStatusClass,
+    domFallbackResolved: facts.domFallbackResolved,
+  };
+  if (facts.authoritativeRequestStatus !== "success") {
+    return {
+      ...audit,
+      identityEvidence: identity,
+      inventoryEvidenceSources: facts.inventoryEvidenceSources,
+      inventoryRequestEvidence,
+      status: "inconclusive",
+      reasons: ["Authoritative resume inventory request did not complete."],
+    };
+  }
   if (!facts.inventoryResolved && audit.status === "safe") {
     return {
       ...audit,
       identityEvidence: identity,
       inventoryEvidenceSources: facts.inventoryEvidenceSources,
+      inventoryRequestEvidence,
       status: "inconclusive",
       reasons: ["Resume inventory could not be resolved."],
     };
@@ -920,6 +989,7 @@ export async function auditWiseResumeFixtureIsolationAccount(
     return {
       ...audit,
       status: "unsafe",
+      inventoryRequestEvidence,
       fixtureIsolated: false,
       mutationScopeLockedToFixture: false,
       reasons: ["Persisted fixture scope does not match the authenticated account."],
@@ -929,6 +999,7 @@ export async function auditWiseResumeFixtureIsolationAccount(
     ...audit,
     identityEvidence: identity,
     inventoryEvidenceSources: facts.inventoryEvidenceSources,
+    inventoryRequestEvidence,
   };
 }
 

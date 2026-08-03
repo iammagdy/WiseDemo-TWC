@@ -41,6 +41,26 @@ function safeMismatchCategory(value: string | null): string | null {
     : null;
 }
 
+function safeInventoryRequestStatus(value: string | null): string | null {
+  return [
+    "success",
+    "unauthorized",
+    "forbidden",
+    "invalid-query",
+    "not-found",
+    "rate-limited",
+    "server-error",
+    "network-error",
+    "invalid-response",
+  ].includes(value ?? "")
+    ? value
+    : null;
+}
+
+function safeInventoryHttpStatusClass(value: string | null): string | null {
+  return ["2xx", "4xx", "5xx", "network", "unknown"].includes(value ?? "") ? value : null;
+}
+
 export function createDirectedFailureDiagnosticPersister(input: {
   repository: Pick<WiseDemoRepository, "createDirectorArtifact">;
   projectId: string;
@@ -195,6 +215,7 @@ export async function readDirectedFailureDiagnostics(
   const auditEnvelope = asRecord(auditArtifact?.payload_json);
   const audit = asRecord(auditEnvelope.audit);
   const identity = asRecord(audit.identityEvidence);
+  const inventoryRequest = asRecord(audit.inventoryRequestEvidence);
   const checkpoints = Array.isArray(checkpointArtifact?.payload_json)
     ? checkpointArtifact.payload_json.slice(0, 32).map((item, index) => {
         const checkpoint = asRecord(item);
@@ -247,6 +268,20 @@ export async function readDirectedFailureDiagnostics(
             .filter((source): source is string => source !== null)
             .slice(0, 8)
         : [],
+      inventoryRequestEvidence: {
+        source:
+          asString(inventoryRequest.source, 64) === "appwrite-resumes" ? "appwrite-resumes" : null,
+        sourceAvailable: asBoolean(inventoryRequest.sourceAvailable),
+        inventoryResolved: asBoolean(inventoryRequest.inventoryResolved),
+        requestStatus: safeInventoryRequestStatus(asString(inventoryRequest.requestStatus, 64)),
+        httpStatusClass: safeInventoryHttpStatusClass(
+          asString(inventoryRequest.httpStatusClass, 16),
+        ),
+        domFallbackResolved:
+          typeof inventoryRequest.domFallbackResolved === "boolean"
+            ? inventoryRequest.domFallbackResolved
+            : null,
+      },
       totalResumeCount: asNumber(audit.totalResumeCount),
       fixtureResumeCount: asNumber(audit.fixtureResumeCount),
       nonFixtureResumeCount: asNumber(audit.nonFixtureResumeCount),
