@@ -5,6 +5,7 @@ import {
   canRemovePrivacyShield,
   fixtureViewportMaskDocumentScript,
   privacyShieldDocumentScript,
+  privacyShieldIsActiveExpression,
 } from "./steel-privacy-shield.server.ts";
 
 test("privacy shield script is opaque and shows only the approved preparation message", () => {
@@ -19,6 +20,14 @@ test("fixture viewport mask hides account navigation before the final take", () 
   const script = fixtureViewportMaskDocumentScript();
   assert.match(script, /aside, nav, \[role=navigation\]/);
   assert.match(script, /visibility: hidden/);
+});
+
+test("live shield verification requires a mounted, visible overlay rather than registration alone", () => {
+  const expression = privacyShieldIsActiveExpression();
+  assert.match(expression, /isConnected/);
+  assert.match(expression, /getComputedStyle/);
+  assert.match(expression, /getBoundingClientRect/);
+  assert.doesNotMatch(expression, /^Boolean\(/);
 });
 
 test("privacy shield cannot be removed while fixture safety is incomplete", () => {

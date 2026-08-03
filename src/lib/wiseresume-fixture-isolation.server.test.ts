@@ -143,6 +143,7 @@ test("fixture route expression declares each helper before it is used", () => {
     expression.indexOf("const elementText") < expression.indexOf("elementText(entry.element)"),
   );
   assert.ok(expression.indexOf("const cssPath") < expression.indexOf("cssPath(create)"));
+  assert.match(expression, /fixtureSelector/);
   assert.doesNotMatch(expression, /username|password|credential|secret/i);
 });
 

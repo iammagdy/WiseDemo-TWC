@@ -76,7 +76,14 @@ export function privacyShieldInstallExpression(): string {
 }
 
 export function privacyShieldIsActiveExpression(): string {
-  return `Boolean(document.getElementById(${JSON.stringify(WISEDEMO_PRIVACY_SHIELD_ID)}))`;
+  return `(() => {
+    const shield = document.getElementById(${JSON.stringify(WISEDEMO_PRIVACY_SHIELD_ID)});
+    if (!shield || !shield.isConnected) return false;
+    const style = getComputedStyle(shield);
+    const rect = shield.getBoundingClientRect();
+    return style.display !== "none" && style.visibility !== "hidden" &&
+      style.pointerEvents !== "none" && rect.width > 0 && rect.height > 0;
+  })()`;
 }
 
 export function privacyShieldRemoveExpression(): string {
