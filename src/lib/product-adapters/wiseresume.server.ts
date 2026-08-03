@@ -649,11 +649,8 @@ function resumeRecordIdFromUrl(value: string): string | null {
   }
 }
 
-async function readWiseResumeFixtureInventory(
-  context: ProductLocaleAdapterContext,
-): Promise<WiseResumeFixtureInventoryFacts> {
-  const facts = asRecord(
-    await context.evaluate(`(() => {
+export function wiseResumeFixtureInventoryExpression(): string {
+  return `(() => {
       const fixtureTitle = ${JSON.stringify(WISE_RESUME_FIXTURE_TITLE)};
       const visible = (element) => { const rect = element.getBoundingClientRect(); const style = getComputedStyle(element); return rect.width > 4 && rect.height > 4 && style.display !== "none" && style.visibility !== "hidden"; };
       const recordId = (element) => {
@@ -676,7 +673,7 @@ async function readWiseResumeFixtureInventory(
         const marker = element.getAttribute("data-wisedemo-fixture") === "smart-tailoring" || String(element.textContent || "").includes(fixtureTitle);
         records.set(id, { fixture: current.fixture || marker });
       }
-      const inventoryResolved = records.size > 0 || Boolean(document.querySelector("[data-testid*=resume], [data-testid*=empty], [class*=resume]"));
+      const inventoryResolved = records.size > 0 || Boolean(document.querySelector("[data-testid*=resume], [data-testid*=empty], [class*=resume], [data-resume-list], [aria-label='New Resume'], [aria-label*='Search resumes']"));
       return {
         authenticatedAccountConfirmed: false,
         inventoryResolved,
@@ -684,8 +681,13 @@ async function readWiseResumeFixtureInventory(
         fixtureRecordIds: Array.from(records.entries()).filter(([, value]) => value.fixture).map(([id]) => id),
         privacyShieldActive: Boolean(document.getElementById("wisedemo-privacy-shield")),
       };
-    })()`),
-  );
+    })()`;
+}
+
+async function readWiseResumeFixtureInventory(
+  context: ProductLocaleAdapterContext,
+): Promise<WiseResumeFixtureInventoryFacts> {
+  const facts = asRecord(await context.evaluate(wiseResumeFixtureInventoryExpression()));
   return {
     authenticatedAccountConfirmed: facts?.authenticatedAccountConfirmed === true,
     inventoryResolved: facts?.inventoryResolved === true,

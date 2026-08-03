@@ -10,6 +10,7 @@ import {
   serializeWiseResumeAdapterArtifact,
   validateWiseResumeFictionalJobPosting,
   validateWiseResumeFictionalResume,
+  wiseResumeFixtureInventoryExpression,
   type WiseResumeSmartTailoringPlan,
 } from "./wiseresume.server.ts";
 
@@ -86,4 +87,35 @@ test("WiseResume adapter artifacts exclude credentials and preserve only sanitiz
   const serialized = JSON.stringify(serializeWiseResumeAdapterArtifact(plan));
   assert.doesNotMatch(serialized, /username|password|secret|credential/i);
   assert.match(serialized, /abc123/);
+});
+
+test("WiseResume inventory recognizes a settled resume workspace without reading resume content", () => {
+  const evaluate = new Function(
+    "document",
+    "HTMLAnchorElement",
+    "getComputedStyle",
+    "location",
+    `return ${wiseResumeFixtureInventoryExpression()};`,
+  ) as (
+    document: {
+      querySelectorAll: () => [];
+      querySelector: (selector: string) => object | null;
+      getElementById: () => null;
+    },
+    anchor: new () => object,
+    getComputedStyle: () => { display: string; visibility: string },
+    location: { href: string },
+  ) => { inventoryResolved: boolean; totalResumeCount: number };
+  const inventory = evaluate(
+    {
+      querySelectorAll: () => [],
+      querySelector: (selector) => (selector.includes("New Resume") ? {} : null),
+      getElementById: () => null,
+    },
+    class {},
+    () => ({ display: "block", visibility: "visible" }),
+    { href: "https://example.test/dashboard" },
+  );
+  assert.equal(inventory.inventoryResolved, true);
+  assert.equal(inventory.totalResumeCount, 0);
 });
