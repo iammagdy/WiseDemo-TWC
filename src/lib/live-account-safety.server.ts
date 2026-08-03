@@ -95,7 +95,14 @@ export function serializeLiveAccountSafetyAudit(audit: LiveAccountSafetyAudit) {
     privacyShieldActive: audit.privacyShieldActive,
     mutationScopeLockedToFixture: audit.mutationScopeLockedToFixture,
     personalDataMarkersFound: audit.personalDataMarkersFound,
-    reasons: audit.reasons.map((reason) => reason.slice(0, 240)),
+    reasons: audit.reasons.map(sanitizeLiveAccountSafetyReason),
     auditedAt: audit.auditedAt,
   };
+}
+
+function sanitizeLiveAccountSafetyReason(reason: string): string {
+  return reason
+    .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, "[redacted-email]")
+    .replace(/\b[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}\b/gi, "[redacted-id]")
+    .slice(0, 240);
 }

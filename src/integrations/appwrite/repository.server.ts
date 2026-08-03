@@ -910,6 +910,25 @@ export class WiseDemoRepository {
     }
   }
 
+  async listDemoEvents(demoId: string): Promise<DemoEventRecord[]> {
+    try {
+      const result = await this.#tables.listRows<EventRow>({
+        databaseId: this.#config.databaseId,
+        tableId: this.#config.demoEventsTableId,
+        queries: [
+          Query.equal("workspace_id", this.#workspaceId),
+          Query.equal("demo_id", demoId),
+          Query.orderAsc("$createdAt"),
+          Query.limit(100),
+        ],
+        ttl: 0,
+      });
+      return result.rows.map(eventFromRow);
+    } catch (error) {
+      throw safeAppwriteError(error);
+    }
+  }
+
   async createComposition(input: CompositionCreate): Promise<CompositionRecord> {
     const rowId = crypto.randomUUID();
     try {

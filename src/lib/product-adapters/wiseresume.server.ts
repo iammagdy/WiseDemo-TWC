@@ -714,17 +714,39 @@ export function evaluateWiseResumeAuthenticatedIdentity(input: {
 async function readWiseResumeAuthenticatedIdentity(
   context: ProductLocaleAdapterContext,
   expectedAccountFingerprint: string,
+  onIdentityAttempt?: (
+    evidence: import("../wiseresume-identity.server.ts").WiseResumeIdentityEvidence,
+  ) => Promise<void>,
 ): Promise<import("../wiseresume-identity.server.ts").WiseResumeIdentityEvidence> {
   const {
+    createWiseResumeIdentityAttemptEvidence,
     resolveWiseResumeIdentity,
     wiseResumeAppwriteAccountIdentityExpression,
     wiseResumeScopedAccountControlIdentityExpression,
   } = await import("../wiseresume-identity.server.ts");
   const primary = asRecord(await context.evaluate(wiseResumeAppwriteAccountIdentityExpression()));
+  await onIdentityAttempt?.(
+    createWiseResumeIdentityAttemptEvidence({
+      source: "appwrite-account",
+      sourceAvailable: primary?.sourceAvailable === true,
+      liveAccountFingerprint: asString(primary?.liveAccountFingerprint),
+      expectedAccountFingerprint,
+    }),
+  );
   const fallback =
     primary?.sourceAvailable === true
       ? null
       : asRecord(await context.evaluate(wiseResumeScopedAccountControlIdentityExpression()));
+  if (fallback) {
+    await onIdentityAttempt?.(
+      createWiseResumeIdentityAttemptEvidence({
+        source: "scoped-account-control",
+        sourceAvailable: fallback.sourceAvailable === true,
+        liveAccountFingerprint: asString(fallback.liveAccountFingerprint),
+        expectedAccountFingerprint,
+      }),
+    );
+  }
   return resolveWiseResumeIdentity({
     expectedAccountFingerprint,
     primary: {
@@ -746,6 +768,9 @@ export async function auditWiseResumeFixtureIsolationAccount(
     expectedAccountFingerprint: string;
     accountFingerprint: string;
     storedFixture: WiseResumeFixtureReference | null;
+    onIdentityAttempt?: (
+      evidence: import("../wiseresume-identity.server.ts").WiseResumeIdentityEvidence,
+    ) => Promise<void>;
   },
 ): Promise<LiveAccountSafetyAudit> {
   if (!(await isWiseResume(context))) {
@@ -768,6 +793,7 @@ export async function auditWiseResumeFixtureIsolationAccount(
   const identity = await readWiseResumeAuthenticatedIdentity(
     context,
     input.expectedAccountFingerprint,
+    input.onIdentityAttempt,
   );
   const audit = createWiseResumeFixtureIsolationAudit({
     ...facts,

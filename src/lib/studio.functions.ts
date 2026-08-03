@@ -80,6 +80,7 @@ import {
   type PrivacyShieldRegistration,
 } from "./steel-recon.server";
 import { canRemovePrivacyShield } from "./steel-privacy-shield.server";
+import { createDirectedFailureDiagnosticPersister } from "./directed-failure-diagnostics.server";
 import {
   parseWiseResumeFixtureReference,
   serializeWiseResumeFixtureReference,
@@ -740,6 +741,13 @@ export const captureDirectedDemo = createServerFn({ method: "POST" })
     });
     const monotonicNow = () => performance.now();
     const privacyShieldCheckpoints: PrivacyShieldCheckpointResult[] = [];
+    const failureDiagnostics = createDirectedFailureDiagnosticPersister({
+      repository: context.repository,
+      projectId: project.id,
+      demoId: demo.id,
+      auditCacheKey,
+      authenticatedMapState: mapState,
+    });
     try {
       const capture = await runSingleSessionDirectedCapture<
         Awaited<ReturnType<typeof createSteelSession>>,
@@ -776,13 +784,13 @@ export const captureDirectedDemo = createServerFn({ method: "POST" })
         installPrivacyShield: (websocketUrl) =>
           installWiseDemoPrivacyShield({ websocketUrl, recordingLocale: demo.recording_locale }),
         assertPrivacyShield: async (websocketUrl, checkpoint) => {
-          privacyShieldCheckpoints.push(
-            await assertPrivacyShieldActive({
-              websocketUrl,
-              checkpoint,
-              recordingLocale: demo.recording_locale,
-            }),
-          );
+          const result = await assertPrivacyShieldActive({
+            websocketUrl,
+            checkpoint,
+            recordingLocale: demo.recording_locale,
+          });
+          privacyShieldCheckpoints.push(result);
+          await failureDiagnostics.persistCheckpoint(result);
         },
         removePrivacyShield: async (websocketUrl, preflight, registration) => {
           if (!canRemovePrivacyShield(preflight.adapterPlan.finalVisibleSafety))
@@ -803,6 +811,7 @@ export const captureDirectedDemo = createServerFn({ method: "POST" })
                 privacyShielded: true,
                 onPrivacyShieldCheckpoint: (result) => {
                   privacyShieldCheckpoints.push(result);
+                  return failureDiagnostics.persistCheckpoint(result);
                 },
               });
               await context.repository.updateDemo(demo.id, {
@@ -813,8 +822,8 @@ export const captureDirectedDemo = createServerFn({ method: "POST" })
               });
             }
           : undefined,
-        liveAccountSafetyAudit: (websocketUrl) =>
-          withProductLocaleAdapterContext({
+        liveAccountSafetyAudit: async (websocketUrl) => {
+          const audit = await withProductLocaleAdapterContext({
             websocketUrl,
             recordingLocale: demo.recording_locale,
             execute: (adapterContext) =>
@@ -822,8 +831,12 @@ export const captureDirectedDemo = createServerFn({ method: "POST" })
                 expectedAccountFingerprint: accountFingerprint,
                 accountFingerprint,
                 storedFixture,
+                onIdentityAttempt: failureDiagnostics.persistIdentityAttempt,
               }),
-          }),
+          });
+          await failureDiagnostics.persistAudit(audit);
+          return audit;
+        },
         assertMutationAllowed: (audit) =>
           assertLiveAccountMutationAllowed(audit as LiveAccountSafetyAudit | undefined),
         preflight: async (
@@ -853,6 +866,7 @@ export const captureDirectedDemo = createServerFn({ method: "POST" })
                       recordingLocale: demo.recording_locale,
                     }),
                   );
+                  await failureDiagnostics.persistCheckpoint(privacyShieldCheckpoints.at(-1)!);
                 },
               }),
           });

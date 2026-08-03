@@ -16,6 +16,24 @@ type WiseResumeIdentityAttempt = {
   liveAccountFingerprint: string | null;
 };
 
+export function createWiseResumeIdentityAttemptEvidence(input: {
+  source: WiseResumeIdentityEvidence["source"];
+  sourceAvailable: boolean;
+  liveAccountFingerprint: string | null;
+  expectedAccountFingerprint: string;
+}): WiseResumeIdentityEvidence {
+  const authenticatedAccountConfirmed =
+    input.sourceAvailable &&
+    input.liveAccountFingerprint !== null &&
+    input.liveAccountFingerprint === input.expectedAccountFingerprint;
+  return {
+    source: input.source,
+    sourceAvailable: input.sourceAvailable,
+    authenticatedAccountConfirmed,
+    confidence: input.sourceAvailable ? (input.source === "appwrite-account" ? 1 : 0.84) : 0,
+  };
+}
+
 function fingerprintExpression(): string {
   return `const fingerprint = (value) => {
     let hash = 2166136261;
@@ -81,15 +99,12 @@ export function resolveWiseResumeIdentity(input: {
       confidence: 0,
     };
   }
-  const authenticatedAccountConfirmed =
-    attempt.liveAccountFingerprint !== null &&
-    attempt.liveAccountFingerprint === input.expectedAccountFingerprint;
-  return {
+  return createWiseResumeIdentityAttemptEvidence({
     source: attempt.source,
     sourceAvailable: true,
-    authenticatedAccountConfirmed,
-    confidence: attempt.source === "appwrite-account" ? 1 : 0.84,
-  };
+    liveAccountFingerprint: attempt.liveAccountFingerprint,
+    expectedAccountFingerprint: input.expectedAccountFingerprint,
+  });
 }
 
 export function classifyWiseResumeIdentityEvidence(
