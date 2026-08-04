@@ -763,6 +763,16 @@ export const captureDirectedDemo = createServerFn({ method: "POST" })
           artifact.artifact_kind === "wiseresume-fixture-reference" && artifact.status === "ready",
       )?.payload_json,
     );
+    // This destructive escape hatch is disabled by default. It is enabled only
+    // for an explicitly authorized live run and is consumed permanently once
+    // its sanitized evidence has been persisted for this workspace.
+    const capacityDeletionAuthorized =
+      serverEnv("WISEDEMO_ALLOW_ONE_CAPACITY_DELETION") === "true" &&
+      !storedFixture &&
+      !artifacts.some(
+        (artifact) =>
+          artifact.artifact_kind === "wiseresume-capacity-deletion" && artifact.status === "ready",
+      );
     let fixtureForCapture = storedFixture;
     const mapState = classifyAuthenticatedMap({
       credentialSavedAt: credentialMeta?.updated_at,
@@ -940,6 +950,26 @@ export const captureDirectedDemo = createServerFn({ method: "POST" })
                   LiveAccountSafetyAudit | undefined,
                 storedFixture: fixtureForCapture,
                 accountFingerprint: expectedAccountFingerprint,
+                allowOneCapacityDeletion: capacityDeletionAuthorized,
+                onCapacityDeletion: async (evidence) => {
+                  await context.repository.createDirectorArtifact({
+                    project_id: project.id,
+                    demo_id: demo.id,
+                    artifact_kind: "wiseresume-capacity-deletion",
+                    cache_key: boundedArtifactCacheKey(
+                      briefArtifact.cache_key,
+                      "wiseresume-capacity-deletion",
+                    ),
+                    status: "ready",
+                    payload_json: evidence as unknown as Json,
+                    expires_at: null,
+                    provider: "wisedemo",
+                    model: null,
+                    duration_ms: null,
+                    revision: 0,
+                    failure_reason: null,
+                  });
+                },
                 assertPrivacyShield: async (checkpoint) => {
                   privacyShieldCheckpoints.push(
                     await assertPrivacyShieldActive({

@@ -596,6 +596,18 @@ export function serializeWiseResumeAdapterArtifact(plan: WiseResumeSmartTailorin
 export type WiseResumeFixtureSmartTailoringPlan = WiseResumeSmartTailoringPlan & {
   fixture: WiseResumeFixtureReference;
   finalVisibleSafety: WiseResumeFinalVisibleSafety;
+  capacityDeletion?: WiseResumeCapacityDeletionEvidence;
+};
+
+export type WiseResumeCapacityDeletionEvidence = {
+  selectionCategory:
+    "experimental" | "duplicate-copy" | "incomplete" | "trial" | "oldest-non-primary";
+  nonPrimaryConfirmed: true;
+  nonMasterConfirmed: true;
+  exactTargetCount: 1;
+  deletionSuccess: true;
+  inventoryCountBefore: number;
+  inventoryCountAfter: number;
 };
 
 type WiseResumeFixtureInventoryFacts = {
@@ -1521,12 +1533,118 @@ async function readWiseResumeFinalVisibleSafety(
   });
 }
 
+async function deleteOneWiseResumeCapacityRecord(
+  context: ProductLocaleAdapterContext,
+  audit: LiveAccountSafetyAudit | undefined,
+): Promise<WiseResumeCapacityDeletionEvidence> {
+  const inventory = audit?.inventoryRequestEvidence;
+  if (
+    audit?.authenticatedAccountConfirmed !== true ||
+    audit.privacyShieldActive !== true ||
+    inventory?.requestStatus !== "success" ||
+    inventory.inventoryResolved !== true ||
+    inventory.countEstablished !== true
+  ) {
+    throw new Error(
+      "WiseResume capacity deletion requires a confirmed shielded account inventory.",
+    );
+  }
+  const result = asRecord(
+    await context.evaluate(`(async () => {
+      const endpoint = "https://fra.cloud.appwrite.io/v1";
+      const project = "69fd362b001eb325a192";
+      const headers = { "X-Appwrite-Project": project, "Content-Type": "application/json" };
+      const query = (attribute, values) => encodeURIComponent(JSON.stringify({ method: "equal", attribute, values }));
+      const list = async (userId) => {
+        const response = await fetch(endpoint + "/databases/main/collections/resumes/documents?queries[]=" + query("user_id", [userId]) + "&queries[]=" + encodeURIComponent(JSON.stringify({ method: "limit", values: [50] })), { credentials: "include", headers });
+        if (!response.ok) return null;
+        const payload = await response.json();
+        return Array.isArray(payload?.documents) ? payload.documents : null;
+      };
+      const accountResponse = await fetch(endpoint + "/account", { credentials: "include", headers });
+      if (!accountResponse.ok) return { ok: false, reason: "account" };
+      const account = await accountResponse.json();
+      if (typeof account?.$id !== "string" || !account.$id) return { ok: false, reason: "account" };
+      const documents = await list(account.$id);
+      if (!documents) return { ok: false, reason: "inventory" };
+      const ids = new Set(documents.map((document) => typeof document?.$id === "string" ? document.$id : "").filter(Boolean));
+      const hasDependent = (id) => documents.some((document) => document?.parent_resume_id === id);
+      const eligible = documents.map((document) => {
+        const id = typeof document?.$id === "string" && ids.has(document.$id) ? document.$id : null;
+        const title = typeof document?.title === "string" ? document.title : "";
+        const parent = typeof document?.parent_resume_id === "string" && ids.has(document.parent_resume_id) ? document.parent_resume_id : null;
+        const nonPrimary = document?.is_primary === false;
+        const nonMaster = document?.is_master === false || Boolean(parent);
+        const independent = Boolean(id) && !hasDependent(id);
+        const incomplete = !title.trim() || (![document?.summary, document?.experience, document?.education, document?.skills].some((value) => typeof value === "string" && value.trim().length > 24));
+        return { id, title, parent, nonPrimary, nonMaster, independent, incomplete, trial: document?.is_trial === true, createdAt: String(document?.$createdAt || "") };
+      }).filter((record) => record.id && record.nonPrimary && record.nonMaster && record.independent);
+      const categories = [
+        ["experimental", (record) => /\\b(wisedemo|demo|qa|test|sandbox|experimental)\\b/i.test(record.title)],
+        ["duplicate-copy", (record) => Boolean(record.parent) || /\\b(copy|duplicate)\\b/i.test(record.title)],
+        ["incomplete", (record) => record.incomplete],
+        ["trial", (record) => record.trial],
+        ["oldest-non-primary", () => true],
+      ];
+      let selected = null;
+      let category = null;
+      for (const [name, predicate] of categories) {
+        const matches = eligible.filter(predicate);
+        if (!matches.length) continue;
+        if (name === "oldest-non-primary") {
+          matches.sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+          if (matches.length > 1 && matches[0].createdAt === matches[1].createdAt)
+            return { ok: false, reason: "ambiguous" };
+        }
+        if (matches.length !== 1 && name !== "oldest-non-primary") return { ok: false, reason: "ambiguous" };
+        selected = matches[0]; category = name; break;
+      }
+      if (!selected?.id || !category) return { ok: false, reason: "no-eligible-record" };
+      const deletion = await fetch(endpoint + "/databases/main/collections/resumes/documents/" + encodeURIComponent(selected.id), { method: "DELETE", credentials: "include", headers });
+      if (!deletion.ok) return { ok: false, reason: "delete" };
+      const after = await list(account.$id);
+      if (!after || after.length !== documents.length - 1) return { ok: false, reason: "post-delete-inventory" };
+      return { ok: true, selectionCategory: category, nonPrimaryConfirmed: selected.nonPrimary === true, nonMasterConfirmed: selected.nonMaster === true, exactTargetCount: 1, deletionSuccess: true, inventoryCountBefore: documents.length, inventoryCountAfter: after.length };
+    })()`),
+  );
+  if (
+    result?.ok !== true ||
+    !["experimental", "duplicate-copy", "incomplete", "trial", "oldest-non-primary"].includes(
+      asString(result?.selectionCategory) ?? "",
+    ) ||
+    result.nonPrimaryConfirmed !== true ||
+    result.nonMasterConfirmed !== true ||
+    result.exactTargetCount !== 1 ||
+    result.deletionSuccess !== true ||
+    typeof result.inventoryCountBefore !== "number" ||
+    typeof result.inventoryCountAfter !== "number" ||
+    result.inventoryCountAfter !== result.inventoryCountBefore - 1
+  ) {
+    throw new Error(
+      "WiseResume capacity deletion could not select and remove exactly one safe record.",
+    );
+  }
+  return {
+    selectionCategory: asString(
+      result.selectionCategory,
+    ) as WiseResumeCapacityDeletionEvidence["selectionCategory"],
+    nonPrimaryConfirmed: true,
+    nonMasterConfirmed: true,
+    exactTargetCount: 1,
+    deletionSuccess: true,
+    inventoryCountBefore: result.inventoryCountBefore,
+    inventoryCountAfter: result.inventoryCountAfter,
+  };
+}
+
 export async function prepareWiseResumeFixtureSmartTailoring(
   context: ProductLocaleAdapterContext,
   input: {
     liveAccountSafetyAudit: LiveAccountSafetyAudit | undefined;
     storedFixture: WiseResumeFixtureReference | null;
     accountFingerprint: string;
+    allowOneCapacityDeletion?: boolean;
+    onCapacityDeletion?: (evidence: WiseResumeCapacityDeletionEvidence) => Promise<void>;
     assertPrivacyShield?: (checkpoint: string) => Promise<void>;
     onStage?: (stage: WiseResumeFixturePreparationStage) => Promise<void> | void;
   },
@@ -1535,6 +1653,7 @@ export async function prepareWiseResumeFixtureSmartTailoring(
     throw new Error("WiseResume adapter received a non-WiseResume page.");
   const { resume, jobPosting } = createWiseResumeFictionalState();
   let fixture = input.storedFixture;
+  let capacityDeletion: WiseResumeCapacityDeletionEvidence | undefined;
   if (!fixture) {
     await input.onStage?.("reveal-creation-control");
     await input.assertPrivacyShield?.("before-fixture-creation-control-reveal");
@@ -1553,6 +1672,27 @@ export async function prepareWiseResumeFixtureSmartTailoring(
   });
   let resumeUrl = route.resumeUrl;
   if (!fixture) {
+    if (input.allowOneCapacityDeletion) {
+      capacityDeletion = await deleteOneWiseResumeCapacityRecord(
+        context,
+        input.liveAccountSafetyAudit,
+      );
+      await input.onCapacityDeletion?.(capacityDeletion);
+      await gotoWiseResumeFixtureWithShield({
+        context,
+        url: "https://wiseresume.app/dashboard",
+        waitMs: 1_200,
+        checkpointBefore: "before-capacity-refresh-navigation",
+        checkpointAfter: "after-capacity-refresh-navigation",
+        assertPrivacyShield: input.assertPrivacyShield,
+      });
+      route = await resolveWiseResumeFixtureCreationWorkspace(context, {
+        liveAccountSafetyAudit: input.liveAccountSafetyAudit,
+        storedFixture: null,
+        assertPrivacyShield: input.assertPrivacyShield,
+      });
+      resumeUrl = route.resumeUrl;
+    }
     await input.onStage?.("create-or-reuse-fixture");
     if (route.recordId && route.resumeUrl) {
       fixture = createWiseResumeFixtureReference({
@@ -1725,6 +1865,7 @@ export async function prepareWiseResumeFixtureSmartTailoring(
     createControlEvidence: route.createControlEvidence,
     fixture: { ...fixture, lastValidatedAt: new Date().toISOString() },
     finalVisibleSafety,
+    capacityDeletion,
   };
 }
 

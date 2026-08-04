@@ -162,6 +162,7 @@ export type DirectorArtifactKind =
   | "creative-brief"
   | "live-account-safety-audit"
   | "wiseresume-fixture-reference"
+  | "wiseresume-capacity-deletion"
   | "wiseresume-dashboard-workspace"
   | "recording-locale-diagnostics"
   | "privacy-shield-checkpoints"
