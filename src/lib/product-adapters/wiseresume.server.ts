@@ -1199,8 +1199,9 @@ function assertWiseResumeVerifiedDashboardWorkspace(input: {
     inventory?.inventoryResolved !== true ||
     inventory.countEstablished !== true
   ) {
+    const candidateCount = Math.min(5, Math.max(0, evidence.candidateCount));
     throw new Error(
-      `WiseResume dashboard workspace verification failed: ${evidence.routeCategory}.`,
+      `WiseResume dashboard workspace verification failed: route=${evidence.routeCategory}; workspace=${evidence.workspaceConfirmed ? "verified" : "missing"}; candidates=${candidateCount}; control=${evidence.controlVisible && evidence.controlEnabled ? "actionable" : "not-actionable"}.`,
     );
   }
 }

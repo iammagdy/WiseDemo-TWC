@@ -316,6 +316,19 @@ test("dashboard fallback is behavioral, shielded, settled, and clicks only its u
   );
 });
 
+test("dashboard verification failures retain only bounded control diagnostics", async () => {
+  await assert.rejects(
+    resolveWiseResumeFixtureCreationWorkspace(
+      mockedWorkspaceContext({
+        events: [],
+        routes: [routeResult({ workspaceConfirmed: false, candidateCount: 99 })],
+      }),
+      { liveAccountSafetyAudit: safeAudit, storedFixture: null },
+    ),
+    /route=resume-dashboard; workspace=missing; candidates=5; control=not-actionable/,
+  );
+});
+
 test("fixture preparation clicks the unique dashboard control and no other control before mutation", async () => {
   const events: string[] = [];
   const context = mockedWorkspaceContext({
