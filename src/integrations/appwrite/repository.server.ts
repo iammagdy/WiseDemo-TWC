@@ -758,6 +758,57 @@ export class WiseDemoRepository {
     }
   }
 
+  async listDirectorArtifactsByKind(
+    projectId: string,
+    artifactKind: DirectorArtifactKind,
+  ): Promise<DirectorArtifactRecord[]> {
+    try {
+      const result = await this.#tables.listRows<DirectorArtifactRow>({
+        databaseId: this.#config.databaseId,
+        tableId: this.#config.directorArtifactsTableId,
+        queries: [
+          Query.equal("workspace_id", this.#workspaceId),
+          Query.equal("project_id", projectId),
+          Query.equal("artifact_kind", artifactKind),
+          Query.orderDesc("$createdAt"),
+          Query.limit(100),
+        ],
+        ttl: 0,
+      });
+      return result.rows.map(directorArtifactFromRow);
+    } catch (error) {
+      throw safeAppwriteError(error);
+    }
+  }
+
+  async getLatestDirectorArtifactForDemo(input: {
+    projectId: string;
+    demoId: string;
+    artifactKind: DirectorArtifactKind;
+  }): Promise<DirectorArtifactRecord | null> {
+    try {
+      const result = await this.#tables.listRows<DirectorArtifactRow>({
+        databaseId: this.#config.databaseId,
+        tableId: this.#config.directorArtifactsTableId,
+        queries: [
+          Query.equal("workspace_id", this.#workspaceId),
+          Query.equal("project_id", input.projectId),
+          Query.equal("demo_id", input.demoId),
+          Query.equal("artifact_kind", input.artifactKind),
+          Query.orderDesc("$createdAt"),
+          Query.limit(10),
+        ],
+        ttl: 0,
+      });
+      return (
+        result.rows.map(directorArtifactFromRow).find((artifact) => artifact.status === "ready") ??
+        null
+      );
+    } catch (error) {
+      throw safeAppwriteError(error);
+    }
+  }
+
   async upsertCredential(input: {
     project_id: string;
     kind: "password";

@@ -467,7 +467,7 @@ export const getProjectWorkspace = createServerFn({ method: "GET" })
     if (!project) throw new Error("Project not found.");
 
     const demos = await context.repository.listDemos(data.projectId);
-    const [intelligence, storyboards, scenes, qualityReviews, directorArtifacts] =
+    const [intelligence, storyboards, scenes, qualityReviews, directorArtifacts, creativeBriefs] =
       await Promise.all([
         context.repository.getLatestProductIntelligence(data.projectId).catch(() => null),
         Promise.all(demos.map((demo) => context.repository.listStoryboards(demo.id)))
@@ -480,6 +480,9 @@ export const getProjectWorkspace = createServerFn({ method: "GET" })
           .then((items) => items.flat())
           .catch(() => []),
         context.repository.listDirectorArtifacts(data.projectId).catch(() => []),
+        context.repository
+          .listDirectorArtifactsByKind(data.projectId, "creative-brief")
+          .catch(() => []),
       ]);
 
     let credentials: {
@@ -503,7 +506,7 @@ export const getProjectWorkspace = createServerFn({ method: "GET" })
       credentials = null;
     }
 
-    const directedRetryEligibleDemoIds = directorArtifacts.flatMap((artifact) => {
+    const directedRetryEligibleDemoIds = creativeBriefs.flatMap((artifact) => {
       const brief = creativeBriefSchema.safeParse(artifact.payload_json);
       return artifact.demo_id &&
         artifact.artifact_kind === "creative-brief" &&
@@ -700,13 +703,13 @@ export const captureDirectedDemo = createServerFn({ method: "POST" })
     if (!demo) throw new Error("Demo not found.");
     if (["rendering", "ready"].includes(demo.status)) return withDurableRecordingUrl(demo);
     if (data.retryFailed && demo.status === "failed") {
-      const retryArtifacts = await context.repository.listDirectorArtifacts(demo.project_id);
       const retryBrief = creativeBriefSchema.safeParse(
-        retryArtifacts.find(
-          (artifact) =>
-            artifact.demo_id === demo!.id &&
-            artifact.artifact_kind === "creative-brief" &&
-            artifact.status === "ready",
+        (
+          await context.repository.getLatestDirectorArtifactForDemo({
+            projectId: demo.project_id,
+            demoId: demo.id,
+            artifactKind: "creative-brief",
+          })
         )?.payload_json,
       );
       if (!retryBrief.success || retryBrief.data.selectedFeature.name !== "Smart Tailoring")
@@ -739,12 +742,11 @@ export const captureDirectedDemo = createServerFn({ method: "POST" })
     const project = await context.repository.getProject(demo.project_id);
     if (!project) throw new Error("Project not found.");
     const artifacts = await context.repository.listDirectorArtifacts(project.id);
-    const briefArtifact = artifacts.find(
-      (artifact) =>
-        artifact.demo_id === demo.id &&
-        artifact.artifact_kind === "creative-brief" &&
-        artifact.status === "ready",
-    );
+    const briefArtifact = await context.repository.getLatestDirectorArtifactForDemo({
+      projectId: project.id,
+      demoId: demo.id,
+      artifactKind: "creative-brief",
+    });
     if (!briefArtifact) throw new Error("This directed demo has no valid creative brief.");
     const parsedBrief = creativeBriefSchema.safeParse(briefArtifact.payload_json);
     if (!parsedBrief.success) throw new Error("This directed demo has no valid creative brief.");
