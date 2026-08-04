@@ -1131,6 +1131,7 @@ async function clickWiseResumeControlWithShield(input: {
   assertPrivacyShield: ((checkpoint: string) => Promise<void>) | undefined;
   expectedTransition: string;
   transitionError: string;
+  beforeAction?: () => Promise<void> | void;
   onActionCompleted?: () => Promise<void> | void;
 }): Promise<void> {
   input.context.assertActive?.();
@@ -1142,6 +1143,7 @@ async function clickWiseResumeControlWithShield(input: {
     checkpointAfter: input.checkpointAfter,
     assertPrivacyShield: input.assertPrivacyShield,
     action: async () => {
+      await input.beforeAction?.();
       input.context.assertActive?.();
       clicked = await input.context.evaluate(
         `(() => { const target = document.querySelector(${JSON.stringify(input.selector)}); if (!target) return false; target.click(); return true; })()`,
@@ -1287,6 +1289,145 @@ export async function resolveWiseResumeFixtureCreationWorkspace(
   return route;
 }
 
+const wiseResumeCreationSurfaceExpression = `(() => {
+  const visible = (element) => { const rect = element.getBoundingClientRect(); const style = getComputedStyle(element); return rect.width > 4 && rect.height > 4 && style.visibility !== "hidden" && style.display !== "none"; };
+  const dialog = Array.from(document.querySelectorAll('[role="dialog"]')).find(visible);
+  const editor = document.querySelector('textarea, [contenteditable="true"], input[name*="resume"], [data-testid*="editor"]');
+  return Boolean(dialog || editor);
+})()`;
+
+function wiseResumeInstallCreationCaptureExpression(): string {
+  return `(() => {
+    const key = "__wisedemoFixtureCreationCapture";
+    const prior = window[key];
+    if (prior?.restore) prior.restore();
+    const nativeFetch = window.fetch;
+    const capture = { armed: false, requestSeen: false, resumeRecordId: null, restore: null };
+    window.fetch = async function(...args) {
+      const request = args[0];
+      const options = args[1] || {};
+      const requestUrl = typeof request === "string" ? request : request instanceof Request ? request.url : "";
+      const method = String(options.method || (request instanceof Request ? request.method : "GET")).toUpperCase();
+      const response = await nativeFetch.apply(this, args);
+      if (capture.armed && method === "POST" && /\\/databases\\/main\\/collections\\/resumes\\/documents(?:\\?|$)/.test(requestUrl)) {
+        capture.requestSeen = true;
+        try {
+          const payload = await response.clone().json();
+          if (typeof payload?.$id === "string" && payload.$id) capture.resumeRecordId = payload.$id;
+        } catch { /* only the correlated fixture ID is retained */ }
+      }
+      return response;
+    };
+    capture.restore = () => { if (window.fetch !== nativeFetch) window.fetch = nativeFetch; };
+    window[key] = capture;
+    return true;
+  })()`;
+}
+
+const wiseResumeArmCreationCaptureExpression =
+  "(() => { const capture = window.__wisedemoFixtureCreationCapture; if (!capture) return false; capture.armed = true; return true; })()";
+
+const wiseResumeReadCreationCaptureExpression =
+  '(() => { const capture = window.__wisedemoFixtureCreationCapture; return { requestSeen: capture?.requestSeen === true, resumeRecordId: typeof capture?.resumeRecordId === "string" ? capture.resumeRecordId : null }; })()';
+
+const wiseResumeRestoreCreationCaptureExpression =
+  "(() => { const capture = window.__wisedemoFixtureCreationCapture; try { capture?.restore?.(); } finally { delete window.__wisedemoFixtureCreationCapture; } return true; })()";
+
+async function clickWiseResumeCreationDialogControl(input: {
+  context: ProductLocaleAdapterContext;
+  label: "Start from Scratch" | "Mid-Level" | "Continue" | "Create";
+  checkpoint: string;
+  waitFor: string;
+  error: string;
+  assertPrivacyShield: ((checkpoint: string) => Promise<void>) | undefined;
+}): Promise<void> {
+  await executeWiseResumeShieldedNavigationAction({
+    checkpointBefore: `before-${input.checkpoint}`,
+    checkpointAfter: `after-${input.checkpoint}`,
+    assertPrivacyShield: input.assertPrivacyShield,
+    action: async () => {
+      input.context.assertActive?.();
+      const clicked = await input.context.evaluate(`(() => { ${browserHelpers()}
+        const dialog = Array.from(document.querySelectorAll('[role="dialog"]')).find(visible);
+        if (!dialog) return false;
+        const label = ${JSON.stringify(input.label)};
+        const control = Array.from(dialog.querySelectorAll('button, [role="button"]')).filter(visible).find((element) => {
+          const value = text(element);
+          return label === "Mid-Level" ? /^Mid-Level(?:\\s|$)/.test(value) : value === label;
+        });
+        if (!control || control.hasAttribute("disabled") || control.getAttribute("aria-disabled") === "true") return false;
+        control.click();
+        return true;
+      })()`);
+      if (clicked !== true) throw new Error(input.error);
+    },
+    waitForTransition: async () => {
+      const ready = await input.context.waitUntil(input.waitFor, 12_000);
+      if (!ready) throw new Error(input.error);
+    },
+  });
+}
+
+async function completeWiseResumeFixtureCreationDialog(input: {
+  context: ProductLocaleAdapterContext;
+  fixtureTitle: string;
+  assertPrivacyShield: ((checkpoint: string) => Promise<void>) | undefined;
+}): Promise<void> {
+  await clickWiseResumeCreationDialogControl({
+    ...input,
+    label: "Start from Scratch",
+    checkpoint: "fixture-creation-start-from-scratch",
+    waitFor:
+      'Array.from(document.querySelectorAll(\'[role="dialog"] button\')).some((element) => /^Mid-Level(?:\\s|$)/.test(String(element.textContent || "").replace(/\\s+/g, " ").trim()))',
+    error: "WiseResume fixture creation wizard did not expose the fictional blank-resume path.",
+  });
+  await clickWiseResumeCreationDialogControl({
+    ...input,
+    label: "Mid-Level",
+    checkpoint: "fixture-creation-experience-level",
+    waitFor:
+      'Array.from(document.querySelectorAll(\'[role="dialog"] button\')).some((element) => String(element.textContent || "").replace(/\\s+/g, " ").trim() === "Continue" && !element.hasAttribute("disabled"))',
+    error: "WiseResume fixture creation wizard did not accept the fictional experience level.",
+  });
+  await clickWiseResumeCreationDialogControl({
+    ...input,
+    label: "Continue",
+    checkpoint: "fixture-creation-template-step",
+    waitFor:
+      "Boolean(document.querySelector('[role=\"dialog\"] input#title')) || Boolean(document.querySelector('[role=\"dialog\"] button'))",
+    error: "WiseResume fixture creation wizard did not reach template selection.",
+  });
+  await clickWiseResumeCreationDialogControl({
+    ...input,
+    label: "Continue",
+    checkpoint: "fixture-creation-title-step",
+    waitFor: "Boolean(document.querySelector('[role=\"dialog\"] input#title'))",
+    error: "WiseResume fixture creation wizard did not reach the fixture title field.",
+  });
+  await input.assertPrivacyShield?.("before-fixture-creation-title-write");
+  input.context.assertActive?.();
+  const filled = await input.context.evaluate(`(() => {
+    const title = document.querySelector('[role="dialog"] input#title');
+    if (!(title instanceof HTMLInputElement)) return false;
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(title, ${JSON.stringify(input.fixtureTitle)});
+    title.dispatchEvent(new Event("input", { bubbles: true }));
+    title.dispatchEvent(new Event("change", { bubbles: true }));
+    title.dispatchEvent(new Event("blur", { bubbles: true }));
+    return title.value === ${JSON.stringify(input.fixtureTitle)};
+  })()`);
+  if (filled !== true)
+    throw new Error("WiseResume fixture creation wizard rejected the fixture title.");
+  await input.assertPrivacyShield?.("after-fixture-creation-title-write");
+  await clickWiseResumeCreationDialogControl({
+    ...input,
+    label: "Create",
+    checkpoint: "fixture-creation-submit",
+    waitFor:
+      "(() => { const capture = window.__wisedemoFixtureCreationCapture; return Boolean(capture?.resumeRecordId) || !document.querySelector('[role=\"dialog\"]'); })()",
+    error: "WiseResume fixture creation did not return a correlated fixture record.",
+  });
+}
+
 async function createWiseResumeFixture(
   context: ProductLocaleAdapterContext,
   selector: string,
@@ -1296,35 +1437,56 @@ async function createWiseResumeFixture(
 ): Promise<{ fixture: WiseResumeFixtureReference; resumeUrl: string }> {
   context.assertActive?.();
   await onStage?.("create-fixture-before-click");
-  await clickWiseResumeControlWithShield({
-    context,
-    selector,
-    checkpointBefore: "before-fixture-creation-click",
-    checkpointAfter: "after-fixture-creation-transition",
-    assertPrivacyShield,
-    onActionCompleted: async () => {
-      context.assertActive?.();
-      await onStage?.("create-fixture-transition");
-    },
-    expectedTransition:
-      'document.querySelector("textarea, [contenteditable=true], input[name*=resume], [data-testid*=editor]") !== null',
-    transitionError: "WiseResume fixture creation did not reach a new fixture editor.",
-  });
-  context.assertActive?.();
-  await onStage?.("resolve-created-fixture");
-  const resumeUrl = await context.evaluate("location.href");
-  if (typeof resumeUrl !== "string")
-    throw new Error("WiseResume fixture route could not be resolved.");
-  const recordId = resumeRecordIdFromUrl(resumeUrl);
-  if (!recordId) throw new Error("WiseResume fixture creation did not provide a scoped record ID.");
-  return {
-    fixture: createWiseResumeFixtureReference({
-      accountFingerprint,
-      resumeRecordId: recordId,
-      createdByWiseDemo: true,
-    }),
-    resumeUrl,
-  };
+  if ((await context.evaluate(wiseResumeInstallCreationCaptureExpression())) !== true)
+    throw new Error("WiseResume fixture creation correlation could not be installed.");
+  try {
+    await clickWiseResumeControlWithShield({
+      context,
+      selector,
+      checkpointBefore: "before-fixture-creation-click",
+      checkpointAfter: "after-fixture-creation-transition",
+      assertPrivacyShield,
+      beforeAction: async () => {
+        if ((await context.evaluate(wiseResumeArmCreationCaptureExpression)) !== true)
+          throw new Error("WiseResume fixture creation correlation could not be armed.");
+      },
+      onActionCompleted: async () => {
+        context.assertActive?.();
+        await onStage?.("create-fixture-transition");
+      },
+      expectedTransition: wiseResumeCreationSurfaceExpression,
+      transitionError: "WiseResume fixture creation did not reach a bounded creation surface.",
+    });
+    context.assertActive?.();
+    const creationDialogOpen =
+      (await context.evaluate("Boolean(document.querySelector('[role=\"dialog\"]'))")) === true;
+    if (creationDialogOpen) {
+      await completeWiseResumeFixtureCreationDialog({
+        context,
+        fixtureTitle: WISE_RESUME_FIXTURE_TITLE,
+        assertPrivacyShield,
+      });
+    }
+    context.assertActive?.();
+    await onStage?.("resolve-created-fixture");
+    const correlation = asRecord(await context.evaluate(wiseResumeReadCreationCaptureExpression));
+    const recordId = asString(correlation?.resumeRecordId);
+    if (correlation?.requestSeen !== true || !recordId)
+      throw new Error("WiseResume fixture creation did not provide a correlated record ID.");
+    const resumeUrl = await context.evaluate("location.href");
+    if (typeof resumeUrl !== "string")
+      throw new Error("WiseResume fixture route could not be resolved.");
+    return {
+      fixture: createWiseResumeFixtureReference({
+        accountFingerprint,
+        resumeRecordId: recordId,
+        createdByWiseDemo: true,
+      }),
+      resumeUrl,
+    };
+  } finally {
+    await context.evaluate(wiseResumeRestoreCreationCaptureExpression).catch(() => undefined);
+  }
 }
 
 async function readWiseResumeFinalVisibleSafety(

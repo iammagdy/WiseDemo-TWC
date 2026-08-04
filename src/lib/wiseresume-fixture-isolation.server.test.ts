@@ -243,12 +243,26 @@ function mockedWorkspaceContext(input: {
   events: string[];
   clickResult?: boolean;
   createTransition?: boolean;
+  correlatedCreatedRecordId?: string | null;
 }): ProductLocaleAdapterContext {
   let routeIndex = 0;
   let creationClicked = false;
   return {
     evaluate: async (expression) => {
       if (expression === "location.hostname") return "wiseresume.app";
+      if (
+        expression.includes("__wisedemoFixtureCreationCapture") &&
+        expression.includes("nativeFetch")
+      )
+        return true;
+      if (expression.includes("capture.armed = true")) return true;
+      if (expression.includes("capture?.requestSeen"))
+        return {
+          requestSeen: true,
+          resumeRecordId: input.correlatedCreatedRecordId ?? null,
+        };
+      if (expression.includes("delete window.__wisedemoFixtureCreationCapture")) return true;
+      if (expression === "Boolean(document.querySelector('[role=\"dialog\"]'))") return false;
       if (
         expression.includes("wisedemo-fixture-viewport-mask") &&
         expression.includes("const selector =")
@@ -357,7 +371,7 @@ test("fixture preparation clicks the unique dashboard control and no other contr
       accountFingerprint,
       assertPrivacyShield: async () => undefined,
     }),
-    /WiseResume fixture creation did not provide a scoped record ID/,
+    /WiseResume fixture creation did not provide a correlated record ID/,
   );
   assert.deepEqual(
     events.filter((event) => event.startsWith("click:")),
@@ -397,6 +411,80 @@ test("fixture preparation reports only fixed stage names", async () => {
     "resolve-fixture-workspace",
     "create-or-reuse-fixture",
     "create-fixture-before-click",
+  ]);
+});
+
+test("fixture creation completes the bounded blank-resume dialog and uses only its correlated record", async () => {
+  const stages: string[] = [];
+  const dialogActions: string[] = [];
+  let creationDialogOpen = false;
+  const context: ProductLocaleAdapterContext = {
+    evaluate: async (expression) => {
+      if (expression === "location.hostname") return "wiseresume.app";
+      if (
+        expression.includes("wisedemo-fixture-viewport-mask") &&
+        expression.includes("const selector =")
+      )
+        return true;
+      if (expression.includes("workspaceDefinitions"))
+        return routeResult({
+          createSelector: '[data-testid="resume-workspace-toolbar"] [aria-label="New Resume"]',
+        });
+      if (
+        expression.includes("__wisedemoFixtureCreationCapture") &&
+        expression.includes("nativeFetch")
+      )
+        return true;
+      if (expression.includes("capture.armed = true")) return true;
+      if (expression.includes("target.click")) {
+        creationDialogOpen = true;
+        return true;
+      }
+      if (expression === "location.href") return "https://wiseresume.app/editor";
+      if (expression === "Boolean(document.querySelector('[role=\"dialog\"]'))")
+        return creationDialogOpen;
+      if (expression.includes("const label =")) {
+        const label = /const label = "([^"]+)"/.exec(expression)?.[1] ?? "unknown";
+        dialogActions.push(label);
+        if (label === "Create") creationDialogOpen = false;
+        return true;
+      }
+      if (expression.includes("input#title") && expression.includes("title.value")) return true;
+      if (expression.includes("capture?.requestSeen"))
+        return { requestSeen: true, resumeRecordId: "fixture-created-record" };
+      if (expression.includes("delete window.__wisedemoFixtureCreationCapture")) return true;
+      throw new Error("post-creation fixture preparation deliberately not mocked");
+    },
+    delay: async () => undefined,
+    waitUntil: async () => true,
+    goto: async () => undefined,
+  };
+  await assert.rejects(
+    prepareWiseResumeFixtureSmartTailoring(context, {
+      liveAccountSafetyAudit: safeAudit,
+      storedFixture: null,
+      accountFingerprint,
+      assertPrivacyShield: async () => undefined,
+      onStage: (stage) => {
+        stages.push(stage);
+      },
+    }),
+    /post-creation fixture preparation deliberately not mocked/,
+  );
+  assert.deepEqual(dialogActions, [
+    "Start from Scratch",
+    "Mid-Level",
+    "Continue",
+    "Continue",
+    "Create",
+  ]);
+  assert.deepEqual(stages.slice(0, 6), [
+    "reveal-creation-control",
+    "resolve-fixture-workspace",
+    "create-or-reuse-fixture",
+    "create-fixture-before-click",
+    "create-fixture-transition",
+    "resolve-created-fixture",
   ]);
 });
 
