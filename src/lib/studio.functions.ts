@@ -679,12 +679,44 @@ export const createDirectedDemo = createServerFn({ method: "POST" })
   });
 
 export const captureDirectedDemo = createServerFn({ method: "POST" })
-  .inputValidator((data) => z.object({ demoId: z.string().uuid() }).parse(data))
+  .inputValidator((data) =>
+    z.object({ demoId: z.string().uuid(), retryFailed: z.boolean().optional() }).parse(data),
+  )
   .handler(async ({ data }) => {
     const context = await workspaceContext();
-    const demo = await context.repository.getDemo(data.demoId);
+    let demo = await context.repository.getDemo(data.demoId);
     if (!demo) throw new Error("Demo not found.");
     if (["rendering", "ready"].includes(demo.status)) return withDurableRecordingUrl(demo);
+    if (data.retryFailed && demo.status === "failed") {
+      const retryArtifacts = await context.repository.listDirectorArtifacts(demo.project_id);
+      const retryBrief = creativeBriefSchema.safeParse(
+        retryArtifacts.find(
+          (artifact) =>
+            artifact.demo_id === demo!.id &&
+            artifact.artifact_kind === "creative-brief" &&
+            artifact.status === "ready",
+        )?.payload_json,
+      );
+      if (!retryBrief.success || retryBrief.data.selectedFeature.name !== "Smart Tailoring")
+        throw new Error("Failed directed capture has no reusable Smart Tailoring brief.");
+      demo = await context.repository.updateDemo(demo.id, {
+        status: "pending",
+        progress_pct: 30,
+        current_step: "Reusing the validated Smart Tailoring brief for one directed capture retry.",
+        error_code: null,
+        error_message: null,
+        steel_session_id: null,
+        live_view_url: null,
+        session_viewer_url: null,
+      });
+      await appendDemoEvent(
+        context,
+        demo.id,
+        "info",
+        "DIRECTOR_BRIEF_REUSED",
+        "Reused the validated creative brief; no product intelligence or Gemini planning reran.",
+      );
+    }
     if (!directorFeatureEnabled()) {
       throw new Error(
         "The one-session director path is disabled by WISEDEMO_SINGLE_SESSION_DIRECTOR.",

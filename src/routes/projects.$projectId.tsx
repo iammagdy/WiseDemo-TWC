@@ -92,7 +92,7 @@ function ProjectStudio() {
   const [recordingLocale, setRecordingLocale] = useState<RecordingLocale>("english");
   const [selectedFeatureId, setSelectedFeatureId] = useState<string | null>(null);
   const [busyAction, setBusyAction] = useState<
-    "map" | "creds" | "demo" | "scan" | "intelligence" | "capture" | null
+    "map" | "creds" | "demo" | "scan" | "intelligence" | "capture" | "directed-retry" | null
   >(null);
   const [notice, setNotice] = useState<string | null>(null);
   const pollingRef = useRef<Set<string>>(new Set());
@@ -253,6 +253,29 @@ function ProjectStudio() {
       startPolling(directed.demo.id);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Could not queue the demo.");
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function handleRetryDirectedCapture(demoId: string) {
+    setBusyAction("directed-retry");
+    setNotice(null);
+    setError(null);
+    try {
+      const captured = await captureDirected({ data: { demoId, retryFailed: true } });
+      setWorkspace((current) =>
+        current
+          ? {
+              ...current,
+              demos: current.demos.map((demo: Demo) =>
+                demo.id === captured.id ? { ...demo, ...captured } : demo,
+              ),
+            }
+          : current,
+      );
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Could not retry the directed capture.");
     } finally {
       setBusyAction(null);
     }
@@ -711,6 +734,7 @@ function ProjectStudio() {
                       demo={demo}
                       projectId={projectId}
                       onRetryFinalization={handleRetryFinalization}
+                      onRetryDirectedCapture={handleRetryDirectedCapture}
                       storyboard={
                         workspace.storyboards.find(
                           (storyboard) => storyboard.id === demo.storyboard_id,
@@ -723,6 +747,7 @@ function ProjectStudio() {
                       }
                       onCaptureStoryboard={handleCaptureStoryboard}
                       capturing={busyAction === "capture"}
+                      retryingDirectedCapture={busyAction === "directed-retry"}
                     />
                   ))}
                 </div>
@@ -739,20 +764,24 @@ function DemoRow({
   demo,
   projectId,
   onRetryFinalization,
+  onRetryDirectedCapture,
   storyboard,
   scenes,
   qualityReview,
   onCaptureStoryboard,
   capturing,
+  retryingDirectedCapture,
 }: {
   demo: Demo;
   projectId: string;
   onRetryFinalization: (demoId: string) => void;
+  onRetryDirectedCapture: (demoId: string) => void;
   storyboard: Workspace["storyboards"][number] | null;
   scenes: Workspace["scenes"];
   qualityReview: Workspace["qualityReviews"][number] | null;
   onCaptureStoryboard: (demoId: string) => void;
   capturing: boolean;
+  retryingDirectedCapture: boolean;
 }) {
   const { videoUrl, isLive, isReady, liveUrl } = getDemoPlaybackState(demo);
   const downloadUrl = demo.recording_file_id ? stableRecordingUrl(demo.id, true) : videoUrl;
@@ -765,6 +794,8 @@ function DemoRow({
         demo.error_code,
       ),
     );
+  const canRetryDirectedCapture =
+    demo.status === "failed" && demo.error_code === "DIRECTOR_CAPTURE_FAILED";
   return (
     <article className="rounded-lg border border-border bg-card p-4">
       <div className="grid gap-4 md:grid-cols-[1fr_360px] md:items-start">
@@ -893,6 +924,19 @@ function DemoRow({
             >
               <RefreshCw />
               Retry video finalization
+            </Button>
+          ) : null}
+          {canRetryDirectedCapture ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              data-demo-id={demo.id}
+              onClick={() => onRetryDirectedCapture(demo.id)}
+              disabled={retryingDirectedCapture}
+            >
+              {retryingDirectedCapture ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+              Retry directed capture with cached brief
             </Button>
           ) : null}
           {storyboard && demo.status === "pending" ? (
