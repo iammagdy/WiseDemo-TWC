@@ -619,9 +619,16 @@ export function wiseResumeFixtureRouteExpression(fixtureRecordId: string | null)
       '[aria-label="Resume workspace toolbar"]',
       '[aria-label="Resume workspace"]',
     ];
-    const workspaceDefinition = workspaceDefinitions.find((selector) => { const element = document.querySelector(selector); return element && visible(element); }) || null;
-    const workspace = workspaceDefinition ? document.querySelector(workspaceDefinition) : null;
-    const workspaceConfirmed = routeCategory === "resume-dashboard" && Boolean(workspace);
+    const declaredWorkspaceDefinition = workspaceDefinitions.find((selector) => { const element = document.querySelector(selector); return element && visible(element); }) || null;
+    // WiseResume's authenticated dashboard currently exposes a stable New Resume
+    // control but no explicit workspace test id. Treat main as the workspace only
+    // when that exact dashboard-owned control is singular and visible; never use
+    // a broad page root or a list position as a creation target.
+    const dashboardCreateControls = Array.from(document.querySelectorAll('button[aria-label="New Resume"]')).filter((element) => visible(element) && !(element instanceof HTMLButtonElement && element.disabled) && element.getAttribute("aria-disabled") !== "true");
+    const dashboardWorkspaceFallback = routeCategory === "resume-dashboard" && dashboardCreateControls.length === 1 ? dashboardCreateControls[0].closest("main") : null;
+    const workspaceDefinition = declaredWorkspaceDefinition || (dashboardWorkspaceFallback ? "main" : null);
+    const workspace = declaredWorkspaceDefinition ? document.querySelector(declaredWorkspaceDefinition) : dashboardWorkspaceFallback;
+    const workspaceConfirmed = routeCategory === "resume-dashboard" && Boolean(workspace) && (Boolean(declaredWorkspaceDefinition) || dashboardCreateControls.length === 1);
     const controlDefinitions = [
       { selector: '[data-testid="create-resume"]', category: "data-testid" },
       { selector: '[data-testid="new-resume"]', category: "data-testid" },
