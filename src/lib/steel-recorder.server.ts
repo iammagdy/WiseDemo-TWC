@@ -16,6 +16,8 @@ import { serverEnv } from "./server-env.server.ts";
 const STEEL_BASE = "https://api.steel.dev/v1";
 const DEFAULT_CDP_TIMEOUT_MS = 20_000;
 const MAX_RECORDING_BYTES = 500 * 1024 * 1024;
+const CDP_READINESS_ATTEMPTS = 7;
+const CDP_READINESS_CONNECT_TIMEOUT_MS = 10_000;
 
 export type SteelSession = {
   id: string;
@@ -193,7 +195,7 @@ export async function getSteelSession(sessionId: string): Promise<Record<string,
 
 export async function openCdp(websocketUrl: string): Promise<WebSocket> {
   const upgradeUrl = websocketUrl.replace(/^ws/, "http");
-  const attempts = 4;
+  const attempts = CDP_READINESS_ATTEMPTS;
 
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
@@ -237,7 +239,7 @@ export async function openCdp(websocketUrl: string): Promise<WebSocket> {
               /* ignore */
             }
             reject(new Error("Timed out connecting to the cloud browser."));
-          }, 8_000);
+          }, CDP_READINESS_CONNECT_TIMEOUT_MS);
           socket.addEventListener("open", onOpen);
           socket.addEventListener("error", onError);
         });
@@ -246,7 +248,7 @@ export async function openCdp(websocketUrl: string): Promise<WebSocket> {
       }
     }
 
-    if (attempt < attempts) await delay(500 * attempt);
+    if (attempt < attempts) await delay(Math.min(3_000, 500 * attempt));
   }
 
   if (typeof WebSocket === "undefined") {
