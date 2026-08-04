@@ -74,6 +74,16 @@ export type WiseResumeCreateControlEvidence = {
   controlEnabled: boolean;
 };
 
+export type WiseResumeFixturePreparationStage =
+  | "reveal-creation-control"
+  | "resolve-fixture-workspace"
+  | "create-or-reuse-fixture"
+  | "open-fixture"
+  | "write-fictional-resume"
+  | "open-tailoring-workflow"
+  | "write-fictional-job-posting"
+  | "verify-final-viewport";
+
 export type WiseResumeTransformationEvidence = {
   beforeHash: string;
   afterHash: string;
@@ -1326,6 +1336,7 @@ export async function prepareWiseResumeFixtureSmartTailoring(
     storedFixture: WiseResumeFixtureReference | null;
     accountFingerprint: string;
     assertPrivacyShield?: (checkpoint: string) => Promise<void>;
+    onStage?: (stage: WiseResumeFixturePreparationStage) => Promise<void> | void;
   },
 ): Promise<WiseResumeFixtureSmartTailoringPlan> {
   if (!(await isWiseResume(context)))
@@ -1333,6 +1344,7 @@ export async function prepareWiseResumeFixtureSmartTailoring(
   const { resume, jobPosting } = createWiseResumeFictionalState();
   let fixture = input.storedFixture;
   if (!fixture) {
+    await input.onStage?.("reveal-creation-control");
     await input.assertPrivacyShield?.("before-fixture-creation-control-reveal");
     const revealed = await context.evaluate(
       fixtureViewportMaskAllowControlExpression(WISE_RESUME_CREATION_CONTROL_REVEAL_SELECTOR),
@@ -1341,6 +1353,7 @@ export async function prepareWiseResumeFixtureSmartTailoring(
       throw new Error("WiseResume fixture creation control could not be safely revealed.");
     await input.assertPrivacyShield?.("after-fixture-creation-control-reveal");
   }
+  await input.onStage?.("resolve-fixture-workspace");
   let route = await resolveWiseResumeFixtureCreationWorkspace(context, {
     liveAccountSafetyAudit: input.liveAccountSafetyAudit,
     storedFixture: fixture,
@@ -1348,6 +1361,7 @@ export async function prepareWiseResumeFixtureSmartTailoring(
   });
   let resumeUrl = route.resumeUrl;
   if (!fixture) {
+    await input.onStage?.("create-or-reuse-fixture");
     if (route.recordId && route.resumeUrl) {
       fixture = createWiseResumeFixtureReference({
         accountFingerprint: input.accountFingerprint,
@@ -1378,6 +1392,7 @@ export async function prepareWiseResumeFixtureSmartTailoring(
     targetResumeId: route.recordId,
     operation: "prepare fixture resume",
   });
+  await input.onStage?.("open-fixture");
   if (route.fixtureSelector) {
     await clickWiseResumeControlWithShield({
       context,
@@ -1400,6 +1415,7 @@ export async function prepareWiseResumeFixtureSmartTailoring(
     });
   }
   const fixtureDocument = [WISE_RESUME_FIXTURE_TITLE, resumeDocument(resume)].join("\n");
+  await input.onStage?.("write-fictional-resume");
   await input.assertPrivacyShield?.("before-fixture-resume-mutation");
   const prepared = asRecord(
     await context.evaluate(
@@ -1417,6 +1433,7 @@ export async function prepareWiseResumeFixtureSmartTailoring(
     throw new Error("WiseResume fixture resume could not be prepared in the scoped record.");
   if (prepared.privateDataDetected === true)
     throw new Error("WiseResume fixture viewport contains sensitive data.");
+  await input.onStage?.("open-tailoring-workflow");
   const workflow = asRecord(
     await context.evaluate(`(() => { ${browserHelpers()}
       const control = Array.from(document.querySelectorAll("a[href], button, [role=button]")).filter(visible).find((element) => /smart tailoring|tailor.*resume|tailor|optimi[sz]e.*resume|match.*job/i.test(text(element)));
@@ -1453,6 +1470,7 @@ export async function prepareWiseResumeFixtureSmartTailoring(
     targetResumeId: fixture.resumeRecordId,
     operation: "prepare fixture job posting",
   });
+  await input.onStage?.("write-fictional-job-posting");
   await input.assertPrivacyShield?.("before-fixture-job-posting-mutation");
   const jobPrepared = asRecord(
     await context.evaluate(`(() => { ${browserHelpers()}
@@ -1489,6 +1507,7 @@ export async function prepareWiseResumeFixtureSmartTailoring(
     checkpointAfter: "after-final-fixture-navigation",
     assertPrivacyShield: input.assertPrivacyShield,
   });
+  await input.onStage?.("verify-final-viewport");
   const finalVisibleSafety = await readWiseResumeFinalVisibleSafety(context, fixture);
   assertWiseResumeFinalVisibleContentSafe(finalVisibleSafety);
   return {

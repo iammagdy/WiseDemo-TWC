@@ -762,6 +762,7 @@ export const captureDirectedDemo = createServerFn({ method: "POST" })
       auditCacheKey,
       authenticatedMapState: mapState,
     });
+    let latestFixturePreparationStage: string | null = null;
     try {
       const capture = await runSingleSessionDirectedCapture<
         Awaited<ReturnType<typeof createSteelSession>>,
@@ -899,6 +900,9 @@ export const captureDirectedDemo = createServerFn({ method: "POST" })
                     }),
                   );
                   await failureDiagnostics.persistCheckpoint(privacyShieldCheckpoints.at(-1)!);
+                },
+                onStage: (stage) => {
+                  latestFixturePreparationStage = stage;
                 },
               }),
           });
@@ -1219,8 +1223,13 @@ export const captureDirectedDemo = createServerFn({ method: "POST" })
           })
           .catch(() => undefined);
       }
-      const message =
+      const baseMessage =
         error instanceof Error ? error.message : "Directed one-session capture failed.";
+      const message =
+        latestFixturePreparationStage &&
+        /PROTECTED_(?:SETUP|PREFLIGHT)_TIMEOUT|Protected setup/i.test(baseMessage)
+          ? `${baseMessage} (fixture-stage=${latestFixturePreparationStage})`
+          : baseMessage;
       const failed = await context.repository.updateDemo(demo.id, {
         status: "failed",
         progress_pct: 0,

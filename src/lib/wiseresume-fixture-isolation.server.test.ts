@@ -365,6 +365,35 @@ test("fixture preparation clicks the unique dashboard control and no other contr
   );
 });
 
+test("fixture preparation reports only fixed stage names", async () => {
+  const stages: string[] = [];
+  const context = mockedWorkspaceContext({
+    events: [],
+    routes: [
+      routeResult({ routeCategory: "unrelated" }),
+      routeResult({
+        createSelector: '[data-testid="resume-workspace-toolbar"] [aria-label="New Resume"]',
+      }),
+    ],
+  });
+  await assert.rejects(
+    prepareWiseResumeFixtureSmartTailoring(context, {
+      liveAccountSafetyAudit: safeAudit,
+      storedFixture: null,
+      accountFingerprint,
+      assertPrivacyShield: async () => undefined,
+      onStage: (stage) => {
+        stages.push(stage);
+      },
+    }),
+  );
+  assert.deepEqual(stages.slice(0, 3), [
+    "reveal-creation-control",
+    "resolve-fixture-workspace",
+    "create-or-reuse-fixture",
+  ]);
+});
+
 test("valid dashboard control and stored fixture avoid creation-workspace navigation", async () => {
   const directEvents: string[] = [];
   await resolveWiseResumeFixtureCreationWorkspace(
