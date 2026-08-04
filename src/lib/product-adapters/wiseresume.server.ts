@@ -621,12 +621,13 @@ export function wiseResumeFixtureRouteExpression(fixtureRecordId: string | null)
     ];
     const declaredWorkspaceDefinition = workspaceDefinitions.find((selector) => { const element = document.querySelector(selector); return element && visible(element); }) || null;
     // WiseResume's authenticated dashboard currently exposes a stable New Resume
-    // control but no explicit workspace test id. Treat main as the workspace only
-    // when that exact dashboard-owned control is singular and visible; never use
-    // a broad page root or a list position as a creation target.
+    // control but no explicit workspace test id or semantic main element. Treat
+    // only the control's direct parent as the workspace when that exact
+    // dashboard-owned control is singular and visible; never use a broad page
+    // root or a list position as a creation target.
     const dashboardCreateControls = Array.from(document.querySelectorAll('[aria-label="New Resume"]')).filter((element) => visible(element) && !(element instanceof HTMLButtonElement && element.disabled) && element.getAttribute("aria-disabled") !== "true");
-    const dashboardWorkspaceFallback = routeCategory === "resume-dashboard" && dashboardCreateControls.length === 1 ? dashboardCreateControls[0].closest("main") : null;
-    const workspaceDefinition = declaredWorkspaceDefinition || (dashboardWorkspaceFallback ? "main" : null);
+    const dashboardWorkspaceFallback = routeCategory === "resume-dashboard" && dashboardCreateControls.length === 1 ? dashboardCreateControls[0].parentElement : null;
+    const workspaceDefinition = declaredWorkspaceDefinition || (dashboardWorkspaceFallback ? "direct-parent" : null);
     const workspace = declaredWorkspaceDefinition ? document.querySelector(declaredWorkspaceDefinition) : dashboardWorkspaceFallback;
     const workspaceConfirmed = routeCategory === "resume-dashboard" && Boolean(workspace) && (Boolean(declaredWorkspaceDefinition) || dashboardCreateControls.length === 1);
     const controlDefinitions = [
@@ -643,7 +644,7 @@ export function wiseResumeFixtureRouteExpression(fixtureRecordId: string | null)
     const controlVisible = Boolean(candidate && visible(candidate.element));
     const controlEnabled = Boolean(candidate && !(candidate.element instanceof HTMLButtonElement && candidate.element.disabled) && candidate.element.getAttribute("aria-disabled") !== "true");
     const selectorCategory = candidate && controlVisible && controlEnabled ? candidate.definition.category : "none";
-    const createSelector = candidate && selectorCategory !== "none" ? workspaceDefinition + " " + candidate.definition.selector : null;
+    const createSelector = candidate && selectorCategory !== "none" ? declaredWorkspaceDefinition ? workspaceDefinition + " " + candidate.definition.selector : candidate.definition.selector : null;
     return {
       origin: location.origin,
       resumeUrl: href || null,
