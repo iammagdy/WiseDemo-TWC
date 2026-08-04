@@ -503,6 +503,17 @@ export const getProjectWorkspace = createServerFn({ method: "GET" })
       credentials = null;
     }
 
+    const directedRetryEligibleDemoIds = directorArtifacts.flatMap((artifact) => {
+      const brief = creativeBriefSchema.safeParse(artifact.payload_json);
+      return artifact.demo_id &&
+        artifact.artifact_kind === "creative-brief" &&
+        artifact.status === "ready" &&
+        brief.success &&
+        brief.data.selectedFeature.name === "Smart Tailoring"
+        ? [artifact.demo_id]
+        : [];
+    });
+
     return {
       project: project as ProjectRecord,
       demos: demos.map((demo) => withDurableRecordingUrl(demo)) as DemoRecord[],
@@ -512,6 +523,7 @@ export const getProjectWorkspace = createServerFn({ method: "GET" })
       scenes,
       qualityReviews,
       directorArtifacts,
+      directedRetryEligibleDemoIds,
     };
   });
 

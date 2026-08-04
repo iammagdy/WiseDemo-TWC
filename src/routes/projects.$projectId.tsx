@@ -748,6 +748,9 @@ function ProjectStudio() {
                       onCaptureStoryboard={handleCaptureStoryboard}
                       capturing={busyAction === "capture"}
                       retryingDirectedCapture={busyAction === "directed-retry"}
+                      directedRetryEligible={workspace.directedRetryEligibleDemoIds.includes(
+                        demo.id,
+                      )}
                     />
                   ))}
                 </div>
@@ -771,6 +774,7 @@ function DemoRow({
   onCaptureStoryboard,
   capturing,
   retryingDirectedCapture,
+  directedRetryEligible,
 }: {
   demo: Demo;
   projectId: string;
@@ -782,6 +786,7 @@ function DemoRow({
   onCaptureStoryboard: (demoId: string) => void;
   capturing: boolean;
   retryingDirectedCapture: boolean;
+  directedRetryEligible: boolean;
 }) {
   const { videoUrl, isLive, isReady, liveUrl } = getDemoPlaybackState(demo);
   const downloadUrl = demo.recording_file_id ? stableRecordingUrl(demo.id, true) : videoUrl;
@@ -795,7 +800,9 @@ function DemoRow({
       ),
     );
   const canRetryDirectedCapture =
-    demo.status === "failed" && demo.error_code === "DIRECTOR_CAPTURE_FAILED";
+    directedRetryEligible &&
+    demo.status === "failed" &&
+    demo.error_code === "DIRECTOR_CAPTURE_FAILED";
   return (
     <article className="rounded-lg border border-border bg-card p-4">
       <div className="grid gap-4 md:grid-cols-[1fr_360px] md:items-start">
