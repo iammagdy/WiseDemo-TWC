@@ -1367,7 +1367,11 @@ async function clickWiseResumeCreationDialogControl(input: {
         const label = ${JSON.stringify(input.label)};
         const control = Array.from(dialog.querySelectorAll('button, [role="button"]')).filter(visible).find((element) => {
           const value = text(element);
-          return label === "Mid-Level" ? /^Mid-Level(?:\\s|$)/.test(value) : value === label;
+          return label === "Mid-Level"
+            ? /^Mid-Level(?:\\s|$)/.test(value)
+            : label === "Start from Scratch"
+              ? value === label || value.startsWith(label + " ")
+              : value === label;
         });
         if (!control || control.hasAttribute("disabled") || control.getAttribute("aria-disabled") === "true") return false;
         control.click();
