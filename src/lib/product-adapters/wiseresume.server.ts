@@ -37,6 +37,7 @@ export type ProductLocaleAdapterContext = {
 const WISE_RESUME_CREATION_CONTROL_REVEAL_SELECTOR = [
   '[aria-label="New Resume"]',
   '[aria-label="Create Resume"]',
+  '[aria-label="Create Your First Resume"]',
   '[data-testid="new-resume"]',
   '[data-testid="create-resume"]',
 ].join(", ");
@@ -669,7 +670,7 @@ export function wiseResumeFixtureRouteExpression(fixtureRecordId: string | null)
     // only the control's direct parent as the workspace when that exact
     // dashboard-owned control is singular and visible; never use a broad page
     // root or a list position as a creation target.
-    const dashboardCreateControls = Array.from(document.querySelectorAll('[aria-label="New Resume"], [aria-label="Create Resume"], [data-testid="new-resume"], [data-testid="create-resume"]')).filter((element) => reachableBehindFixtureMask(element) && !(element instanceof HTMLButtonElement && element.disabled) && element.getAttribute("aria-disabled") !== "true");
+    const dashboardCreateControls = Array.from(document.querySelectorAll('[aria-label="New Resume"], [aria-label="Create Resume"], [aria-label="Create Your First Resume"], [data-testid="new-resume"], [data-testid="create-resume"]')).filter((element) => reachableBehindFixtureMask(element) && !(element instanceof HTMLButtonElement && element.disabled) && element.getAttribute("aria-disabled") !== "true");
     const dashboardWorkspaceFallback = routeCategory === "resume-dashboard" && dashboardCreateControls.length === 1 ? dashboardCreateControls[0].parentElement : null;
     const workspaceDefinition = declaredWorkspaceDefinition || (dashboardWorkspaceFallback ? "direct-parent" : null);
     const workspace = declaredWorkspaceDefinition ? document.querySelector(declaredWorkspaceDefinition) : dashboardWorkspaceFallback;
@@ -679,6 +680,7 @@ export function wiseResumeFixtureRouteExpression(fixtureRecordId: string | null)
       { selector: '[data-testid="new-resume"]', category: "data-testid" },
       { selector: '[aria-label="Create Resume"]', category: "aria-label" },
       { selector: '[aria-label="New Resume"]', category: "aria-label" },
+      { selector: '[aria-label="Create Your First Resume"]', category: "aria-label" },
       { selector: 'button[role="button"]', category: "exact-role-label" },
       { selector: "button", category: "exact-role-label" },
     ];

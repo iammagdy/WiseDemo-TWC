@@ -158,6 +158,7 @@ test("fixture route expression declares each helper before it is used", () => {
   );
   assert.match(expression, /fixtureSelector/);
   assert.match(expression, /aria-label="New Resume"/);
+  assert.match(expression, /aria-label="Create Your First Resume"/);
   assert.match(expression, /workspaceDefinitions/);
   assert.match(expression, /dashboardWorkspaceFallback/);
   assert.match(expression, /dashboardCreateControls\.length === 1/);
