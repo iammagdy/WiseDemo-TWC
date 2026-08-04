@@ -114,7 +114,9 @@ export async function createSteelSession(
       blockAds: true,
       recordSession: true,
       // Steel's documented field is `timeout`, in milliseconds.
-      timeout: 180_000,
+      // Preserve enough time for protected fixture setup, a short clean take,
+      // and recording retrieval/release without conflating those phases.
+      timeout: 240_000,
     }),
   });
 

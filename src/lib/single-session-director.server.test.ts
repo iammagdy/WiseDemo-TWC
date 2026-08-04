@@ -103,7 +103,7 @@ test("directed capture uses separate protected setup and clean-take budgets", as
     finalActions: [],
     sleep: async () => undefined,
   });
-  assert.equal(preflightBudget, 75_000);
+  assert.equal(preflightBudget, 125_000);
   assert.equal(takeBudget, 22_000);
 });
 
