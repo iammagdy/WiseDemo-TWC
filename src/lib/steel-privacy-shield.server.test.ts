@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  fixtureViewportMaskAllowControlExpression,
   canRemovePrivacyShield,
   fixtureViewportMaskDocumentScript,
   privacyShieldDocumentScript,
@@ -20,6 +21,13 @@ test("fixture viewport mask hides account navigation before the final take", () 
   const script = fixtureViewportMaskDocumentScript();
   assert.match(script, /aside, nav, \[role=navigation\]/);
   assert.match(script, /visibility: hidden/);
+});
+
+test("fixture control reveal retains the mounted privacy mask", () => {
+  const expression = fixtureViewportMaskAllowControlExpression('[aria-label="New Resume"]');
+  assert.match(expression, /wisedemo-fixture-viewport-mask/);
+  assert.match(expression, /visibility: visible/);
+  assert.doesNotMatch(expression, /username|password|credential|secret/i);
 });
 
 test("live shield verification requires a mounted, visible overlay rather than registration alone", () => {

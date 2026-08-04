@@ -71,6 +71,20 @@ export function fixtureViewportMaskDocumentScript(): string {
   })();`;
 }
 
+// Product adapters may reveal one already-validated control underneath the
+// full-screen shield for protected setup. The selector is never user supplied;
+// it is a narrowly scoped adapter contract and the shield itself remains active.
+export function fixtureViewportMaskAllowControlExpression(selector: string): string {
+  return `(() => {
+    const mask = document.getElementById(${JSON.stringify(WISEDEMO_FIXTURE_VIEWPORT_MASK_ID)});
+    if (!mask || !mask.isConnected) return false;
+    const selector = ${JSON.stringify(selector)};
+    if (!selector || selector.length > 256) return false;
+    mask.textContent += "\\n" + selector + " { visibility: visible !important; pointer-events: auto !important; }";
+    return true;
+  })()`;
+}
+
 export function privacyShieldInstallExpression(): string {
   return privacyShieldDocumentScript();
 }

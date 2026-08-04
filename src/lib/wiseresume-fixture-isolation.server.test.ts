@@ -246,6 +246,10 @@ function mockedWorkspaceContext(input: {
   return {
     evaluate: async (expression) => {
       if (expression === "location.hostname") return "wiseresume.app";
+      if (expression.includes("wisedemo-fixture-viewport-mask")) {
+        input.events.push("reveal:create-control");
+        return true;
+      }
       if (expression.includes("workspaceDefinitions")) {
         input.events.push(`route:${routeIndex}`);
         return input.routes[Math.min(routeIndex++, input.routes.length - 1)];
@@ -354,6 +358,10 @@ test("fixture preparation clicks the unique dashboard control and no other contr
     ["click:true"],
   );
   assert.equal(events.filter((event) => event.startsWith("goto:")).length, 1);
+  assert.deepEqual(
+    events.filter((event) => event.startsWith("reveal:")),
+    ["reveal:create-control"],
+  );
 });
 
 test("valid dashboard control and stored fixture avoid creation-workspace navigation", async () => {

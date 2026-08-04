@@ -1,5 +1,6 @@
 import type { RecordingLocale } from "../recording-locale";
 import type { CdpAction } from "../steel-recorder.server";
+import { fixtureViewportMaskAllowControlExpression } from "../steel-privacy-shield.server.ts";
 import {
   WISE_RESUME_APPWRITE_ENDPOINT,
   wiseResumeWebSdkHeaders,
@@ -1324,6 +1325,15 @@ export async function prepareWiseResumeFixtureSmartTailoring(
     throw new Error("WiseResume adapter received a non-WiseResume page.");
   const { resume, jobPosting } = createWiseResumeFictionalState();
   let fixture = input.storedFixture;
+  if (!fixture) {
+    await input.assertPrivacyShield?.("before-fixture-creation-control-reveal");
+    const revealed = await context.evaluate(
+      fixtureViewportMaskAllowControlExpression('[aria-label="New Resume"]'),
+    );
+    if (revealed !== true)
+      throw new Error("WiseResume fixture creation control could not be safely revealed.");
+    await input.assertPrivacyShield?.("after-fixture-creation-control-reveal");
+  }
   let route = await resolveWiseResumeFixtureCreationWorkspace(context, {
     liveAccountSafetyAudit: input.liveAccountSafetyAudit,
     storedFixture: fixture,
