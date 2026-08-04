@@ -85,6 +85,9 @@ export async function runSingleSessionDirectedCapture<
   ) => Promise<void>;
   liveAccountSafetyAudit?: (websocketUrl: string) => Promise<LiveAudit>;
   assertMutationAllowed?: (audit: LiveAudit | undefined) => void;
+  onProtectedBootstrapStage?: (
+    stage: "install-privacy-shield" | "verify-initial-shield" | "authenticate" | "account-audit",
+  ) => Promise<void> | void;
   preflight: (
     websocketUrl: string,
     maxWallMs: number,
@@ -132,19 +135,27 @@ export async function runSingleSessionDirectedCapture<
     await options.publishLiveSession(session);
     const liveAccountSafetyAudit = await executeWithinBudget(
       async () => {
-        if (options.installPrivacyShield)
+        if (options.installPrivacyShield) {
+          await options.onProtectedBootstrapStage?.("install-privacy-shield");
           privacyShield = await options.installPrivacyShield(websocketUrl);
+        }
         if (options.assertPrivacyShield) {
+          await options.onProtectedBootstrapStage?.("verify-initial-shield");
           await options.assertPrivacyShield(websocketUrl, "after-session-creation");
           await options.assertPrivacyShield(websocketUrl, "before-login-navigation");
         }
-        if (options.authenticate)
+        if (options.authenticate) {
+          await options.onProtectedBootstrapStage?.("authenticate");
           await options.authenticate(websocketUrl, {
             productLoginUrl: options.productLoginUrl,
             productStartUrl: options.productStartUrl,
           });
-        if (options.assertPrivacyShield)
+        }
+        if (options.assertPrivacyShield) {
+          await options.onProtectedBootstrapStage?.("verify-initial-shield");
           await options.assertPrivacyShield(websocketUrl, "before-account-audit");
+        }
+        await options.onProtectedBootstrapStage?.("account-audit");
         const liveAccountSafetyAudit = options.liveAccountSafetyAudit
           ? await options.liveAccountSafetyAudit(websocketUrl)
           : undefined;
@@ -154,7 +165,7 @@ export async function runSingleSessionDirectedCapture<
       phaseBudget.protectedBootstrapMaxMs,
       {
         code: "PROTECTED_BOOTSTRAP_TIMEOUT",
-        message: "Protected bootstrap exceeded its safe session budget before fixture preparation.",
+        message: `Protected bootstrap exceeded its safe session budget before fixture preparation. (budget-ms=${phaseBudget.protectedBootstrapMaxMs})`,
       },
     );
     if (options.assertPrivacyShield)

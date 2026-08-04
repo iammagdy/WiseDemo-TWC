@@ -795,6 +795,7 @@ export const captureDirectedDemo = createServerFn({ method: "POST" })
       authenticatedMapState: mapState,
     });
     let latestFixturePreparationStage: string | null = null;
+    let latestProtectedBootstrapStage: string | null = null;
     try {
       const capture = await runSingleSessionDirectedCapture<
         Awaited<ReturnType<typeof createSteelSession>>,
@@ -902,6 +903,9 @@ export const captureDirectedDemo = createServerFn({ method: "POST" })
         },
         assertMutationAllowed: (audit) =>
           assertLiveAccountMutationAllowed(audit as LiveAccountSafetyAudit | undefined),
+        onProtectedBootstrapStage: (stage) => {
+          latestProtectedBootstrapStage = stage;
+        },
         preflight: async (
           websocketUrl,
           _maxWallMs,
@@ -1259,11 +1263,23 @@ export const captureDirectedDemo = createServerFn({ method: "POST" })
       }
       const baseMessage =
         error instanceof Error ? error.message : "Directed one-session capture failed.";
-      const message =
-        latestFixturePreparationStage &&
-        /PROTECTED_(?:BOOTSTRAP|PREFLIGHT)_TIMEOUT|Protected (?:bootstrap|setup)/i.test(baseMessage)
-          ? `${baseMessage} (fixture-stage=${latestFixturePreparationStage})`
-          : baseMessage;
+      const isProtectedTimeout =
+        /PROTECTED_(?:BOOTSTRAP|PREFLIGHT)_TIMEOUT|Protected (?:bootstrap|setup)/i.test(
+          baseMessage,
+        );
+      const message = isProtectedTimeout
+        ? [
+            baseMessage,
+            latestProtectedBootstrapStage
+              ? `(bootstrap-stage=${latestProtectedBootstrapStage})`
+              : null,
+            latestFixturePreparationStage
+              ? `(fixture-stage=${latestFixturePreparationStage})`
+              : null,
+          ]
+            .filter(Boolean)
+            .join(" ")
+        : baseMessage;
       const failed = await context.repository.updateDemo(demo.id, {
         status: "failed",
         progress_pct: 0,

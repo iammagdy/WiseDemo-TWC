@@ -242,6 +242,35 @@ test("privacy shield is installed before authentication and removed only after p
   ]);
 });
 
+test("bootstrap diagnostics identify the active protected stage without browser details", async () => {
+  const stages: string[] = [];
+  await runSingleSessionDirectedCapture({
+    sessionBootstrapUrl: "about:blank",
+    createSession: async () => ({ id: "steel-1", websocketUrl: "ws://steel" }),
+    releaseSession: async () => ({ id: "steel-1" }),
+    publishLiveSession: async () => undefined,
+    installPrivacyShield: async () => ({ shield: true }),
+    assertPrivacyShield: async () => undefined,
+    authenticate: async () => undefined,
+    liveAccountSafetyAudit: async () => ({ status: "safe" }),
+    assertMutationAllowed: () => undefined,
+    onProtectedBootstrapStage: (stage) => {
+      stages.push(stage);
+    },
+    preflight: async () => "prepared",
+    executeFinalTake: async () => ({ executed: 1, completed: true, diagnostics: [] }),
+    finalActions: [],
+    sleep: async () => undefined,
+  });
+  assert.deepEqual(stages, [
+    "install-privacy-shield",
+    "verify-initial-shield",
+    "authenticate",
+    "verify-initial-shield",
+    "account-audit",
+  ]);
+});
+
 test("one-session lifecycle initializes locale once and verifies it for every later attachment", async () => {
   const localeModes: string[] = [];
   await runSingleSessionDirectedCapture({
