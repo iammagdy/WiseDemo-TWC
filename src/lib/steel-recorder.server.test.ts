@@ -8,6 +8,7 @@ import {
   listIsoBmffBoxes,
   normalizeSelectorCandidates,
   parseHlsPlaylist,
+  releaseSteelSession,
   splitSelectorList,
   SteelRecordingError,
 } from "./steel-recorder.server.ts";
@@ -170,6 +171,25 @@ test("returns pending after bounded attempts without an end list", async () => {
     sleep: async () => undefined,
   });
   assert.equal(result, null);
+});
+
+test("bounds a stalled Steel session release request", async () => {
+  const priorKey = process.env.STEEL_API_KEY;
+  process.env.STEEL_API_KEY = "test-key";
+  try {
+    await assert.rejects(
+      () =>
+        releaseSteelSession("session-id", {
+          fetchImpl: (async () => new Promise<Response>(() => undefined)) as typeof fetch,
+          timeoutMs: 1,
+          sleep: async () => undefined,
+        }),
+      /Steel API request timed out/,
+    );
+  } finally {
+    if (priorKey === undefined) delete process.env.STEEL_API_KEY;
+    else process.env.STEEL_API_KEY = priorKey;
+  }
 });
 
 test("fails the whole artifact when any finalized segment cannot download", async () => {

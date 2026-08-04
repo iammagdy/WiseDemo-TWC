@@ -15,6 +15,8 @@ import { serverEnv } from "./server-env.server.ts";
 
 const STEEL_BASE = "https://api.steel.dev/v1";
 const DEFAULT_CDP_TIMEOUT_MS = 20_000;
+const DEFAULT_STEEL_HTTP_TIMEOUT_MS = 20_000;
+const RELEASE_STEEL_HTTP_TIMEOUT_MS = 10_000;
 const MAX_RECORDING_BYTES = 500 * 1024 * 1024;
 const CDP_READINESS_ATTEMPTS = 7;
 const CDP_READINESS_CONNECT_TIMEOUT_MS = 10_000;
@@ -100,12 +102,41 @@ function steelHeaders(key: string, extra?: HeadersInit): Headers {
   return headers;
 }
 
+async function boundedSteelFetch(
+  input: RequestInfo | URL,
+  init: RequestInit,
+  options?: { fetchImpl?: typeof fetch; timeoutMs?: number },
+): Promise<Response> {
+  const controller = new AbortController();
+  const timeoutMs = options?.timeoutMs ?? DEFAULT_STEEL_HTTP_TIMEOUT_MS;
+  const fetchImpl = options?.fetchImpl ?? fetch;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const request = fetchImpl(input, { ...init, signal: controller.signal });
+  // A transport implementation may ignore AbortSignal. Observe its eventual
+  // rejection while the timeout race lets the directed lifecycle release its
+  // lease instead of holding the studio request indefinitely.
+  void request.catch(() => undefined);
+  try {
+    return await Promise.race([
+      request,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => {
+          controller.abort();
+          reject(new Error("Steel API request timed out."));
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 export async function createSteelSession(
   _startUrl: string,
   _recordingLocale: RecordingLocale = DEFAULT_RECORDING_LOCALE,
 ): Promise<SteelSession> {
   const key = requireSteelKey();
-  const res = await fetch(`${STEEL_BASE}/sessions`, {
+  const res = await boundedSteelFetch(`${STEEL_BASE}/sessions`, {
     method: "POST",
     headers: steelHeaders(key, { "content-type": "application/json" }),
     body: JSON.stringify({
@@ -144,22 +175,37 @@ export async function createSteelSession(
   };
 }
 
-export async function releaseSteelSession(sessionId: string): Promise<SteelSession> {
+export async function releaseSteelSession(
+  sessionId: string,
+  options?: {
+    fetchImpl?: typeof fetch;
+    timeoutMs?: number;
+    sleep?: (milliseconds: number) => Promise<unknown>;
+  },
+): Promise<SteelSession> {
   const key = requireSteelKey();
+  const sleep = options?.sleep ?? delay;
   let res: Response | null = null;
   for (let attempt = 1; attempt <= 4; attempt += 1) {
     try {
-      res = await fetch(`${STEEL_BASE}/sessions/${encodeURIComponent(sessionId)}/release`, {
-        method: "POST",
-        headers: steelHeaders(key),
-      });
+      res = await boundedSteelFetch(
+        `${STEEL_BASE}/sessions/${encodeURIComponent(sessionId)}/release`,
+        {
+          method: "POST",
+          headers: steelHeaders(key),
+        },
+        {
+          fetchImpl: options?.fetchImpl,
+          timeoutMs: options?.timeoutMs ?? RELEASE_STEEL_HTTP_TIMEOUT_MS,
+        },
+      );
     } catch (error) {
       if (attempt >= 4) throw error;
-      await delay(250 * 2 ** (attempt - 1));
+      await sleep(250 * 2 ** (attempt - 1));
       continue;
     }
     if (![429, 502, 503, 504].includes(res.status) || attempt >= 4) break;
-    await delay(250 * 2 ** (attempt - 1));
+    await sleep(250 * 2 ** (attempt - 1));
   }
   if (!res) throw new Error("Steel session release returned no response.");
 
