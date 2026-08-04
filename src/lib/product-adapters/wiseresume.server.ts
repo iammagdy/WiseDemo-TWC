@@ -30,6 +30,13 @@ export type ProductLocaleAdapterContext = {
   goto: (url: string, settleMs: number) => Promise<void>;
 };
 
+const WISE_RESUME_CREATION_CONTROL_REVEAL_SELECTOR = [
+  '[aria-label="New Resume"]',
+  '[aria-label="Create Resume"]',
+  '[data-testid="new-resume"]',
+  '[data-testid="create-resume"]',
+].join(", ");
+
 export type WiseResumeFictionalResume = {
   profile: { name: string; currentRole: string; summary: string };
   experience: Array<{ company: string; title: string; achievements: string[] }>;
@@ -1328,7 +1335,7 @@ export async function prepareWiseResumeFixtureSmartTailoring(
   if (!fixture) {
     await input.assertPrivacyShield?.("before-fixture-creation-control-reveal");
     const revealed = await context.evaluate(
-      fixtureViewportMaskAllowControlExpression('[aria-label="New Resume"]'),
+      fixtureViewportMaskAllowControlExpression(WISE_RESUME_CREATION_CONTROL_REVEAL_SELECTOR),
     );
     if (revealed !== true)
       throw new Error("WiseResume fixture creation control could not be safely revealed.");
