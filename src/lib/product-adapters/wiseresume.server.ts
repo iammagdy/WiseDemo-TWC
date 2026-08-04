@@ -1,6 +1,9 @@
 import type { RecordingLocale } from "../recording-locale";
 import type { CdpAction } from "../steel-recorder.server";
-import { fixtureViewportMaskAllowControlExpression } from "../steel-privacy-shield.server.ts";
+import {
+  fixtureViewportMaskAllowControlExpression,
+  WISEDEMO_FIXTURE_VIEWPORT_MASK_ID,
+} from "../steel-privacy-shield.server.ts";
 import {
   WISE_RESUME_APPWRITE_ENDPOINT,
   wiseResumeWebSdkHeaders,
@@ -631,6 +634,13 @@ export function wiseResumeFixtureRouteExpression(fixtureRecordId: string | null)
     const path = location.pathname.replace(/\\/+$/, "") || "/";
     const routeCategory = location.origin !== expectedOrigin ? "unrelated" : /(?:login|sign-in|auth)/i.test(path) ? "login" : /(?:onboarding|template|profile)/i.test(path) ? "onboarding" : path === "/dashboard" ? "resume-dashboard" : path ? "unrelated" : "unknown";
     const visible = (element) => { const rect = element.getBoundingClientRect(); const style = getComputedStyle(element); return rect.width > 4 && rect.height > 4 && style.display !== "none" && style.visibility !== "hidden"; };
+    const reachableBehindFixtureMask = (element) => {
+      if (visible(element)) return true;
+      const rect = element.getBoundingClientRect(); const style = getComputedStyle(element);
+      const mask = document.getElementById(${JSON.stringify(WISEDEMO_FIXTURE_VIEWPORT_MASK_ID)});
+      const maskHidesElement = Boolean(mask && Array.from(mask.sheet?.cssRules || []).some((rule) => rule instanceof CSSStyleRule && rule.style.getPropertyValue("visibility") === "hidden" && rule.style.getPropertyPriority("visibility") === "important" && Boolean(rule.selectorText) && Boolean(element.closest(rule.selectorText))));
+      return Boolean(maskHidesElement && rect.width > 4 && rect.height > 4 && style.display !== "none" && style.visibility === "hidden" && !element.hasAttribute("hidden") && element.getAttribute("aria-hidden") !== "true");
+    };
     const workspaceDefinitions = [
       '[data-testid="resume-workspace-toolbar"]',
       '[data-testid="resume-workspace"]',
@@ -643,7 +653,7 @@ export function wiseResumeFixtureRouteExpression(fixtureRecordId: string | null)
     // only the control's direct parent as the workspace when that exact
     // dashboard-owned control is singular and visible; never use a broad page
     // root or a list position as a creation target.
-    const dashboardCreateControls = Array.from(document.querySelectorAll('[aria-label="New Resume"]')).filter((element) => visible(element) && !(element instanceof HTMLButtonElement && element.disabled) && element.getAttribute("aria-disabled") !== "true");
+    const dashboardCreateControls = Array.from(document.querySelectorAll('[aria-label="New Resume"], [aria-label="Create Resume"], [data-testid="new-resume"], [data-testid="create-resume"]')).filter((element) => reachableBehindFixtureMask(element) && !(element instanceof HTMLButtonElement && element.disabled) && element.getAttribute("aria-disabled") !== "true");
     const dashboardWorkspaceFallback = routeCategory === "resume-dashboard" && dashboardCreateControls.length === 1 ? dashboardCreateControls[0].parentElement : null;
     const workspaceDefinition = declaredWorkspaceDefinition || (dashboardWorkspaceFallback ? "direct-parent" : null);
     const workspace = declaredWorkspaceDefinition ? document.querySelector(declaredWorkspaceDefinition) : dashboardWorkspaceFallback;
@@ -659,7 +669,7 @@ export function wiseResumeFixtureRouteExpression(fixtureRecordId: string | null)
     const candidates = workspace ? controlDefinitions.flatMap((definition) => Array.from(workspace.querySelectorAll(definition.selector)).filter((element) => definition.category !== "exact-role-label" || String(element.textContent || "").replace(/\\s+/g, " ").trim() === "Create Resume").map((element) => ({ element, definition }))) : [];
     const uniqueCandidates = candidates.filter((candidate, index) => candidates.findIndex((other) => other.element === candidate.element) === index);
     const candidate = uniqueCandidates.length === 1 ? uniqueCandidates[0] : null;
-    const controlVisible = Boolean(candidate && visible(candidate.element));
+    const controlVisible = Boolean(candidate && reachableBehindFixtureMask(candidate.element));
     const controlEnabled = Boolean(candidate && !(candidate.element instanceof HTMLButtonElement && candidate.element.disabled) && candidate.element.getAttribute("aria-disabled") !== "true");
     const selectorCategory = candidate && controlVisible && controlEnabled ? candidate.definition.category : "none";
     const createSelector = candidate && selectorCategory !== "none" ? declaredWorkspaceDefinition ? workspaceDefinition + " " + candidate.definition.selector : candidate.definition.selector : null;

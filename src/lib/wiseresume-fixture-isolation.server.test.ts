@@ -162,6 +162,8 @@ test("fixture route expression declares each helper before it is used", () => {
   assert.match(expression, /dashboardWorkspaceFallback/);
   assert.match(expression, /dashboardCreateControls\.length === 1/);
   assert.match(expression, /\[aria-label="New Resume"\]/);
+  assert.match(expression, /reachableBehindFixtureMask/);
+  assert.match(expression, /wisedemo-fixture-viewport-mask/);
   assert.match(String(prepareWiseResumeFixtureSmartTailoring), /CREATION_CONTROL_REVEAL_SELECTOR/);
   assert.match(expression, /dashboardCreateControls\[0\]\.parentElement/);
   assert.doesNotMatch(expression, /closest\("main"\)/);
@@ -247,7 +249,10 @@ function mockedWorkspaceContext(input: {
   return {
     evaluate: async (expression) => {
       if (expression === "location.hostname") return "wiseresume.app";
-      if (expression.includes("wisedemo-fixture-viewport-mask")) {
+      if (
+        expression.includes("wisedemo-fixture-viewport-mask") &&
+        expression.includes("const selector =")
+      ) {
         input.events.push("reveal:create-control");
         return true;
       }
