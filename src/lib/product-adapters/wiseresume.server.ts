@@ -1658,6 +1658,7 @@ export async function prepareWiseResumeFixtureSmartTailoring(
     accountFingerprint: string;
     allowOneCapacityDeletion?: boolean;
     onCapacityDeletion?: (evidence: WiseResumeCapacityDeletionEvidence) => Promise<void>;
+    onFixtureResolved?: (fixture: WiseResumeFixtureReference) => Promise<void>;
     assertPrivacyShield?: (checkpoint: string) => Promise<void>;
     onStage?: (stage: WiseResumeFixturePreparationStage) => Promise<void> | void;
   },
@@ -1738,6 +1739,7 @@ export async function prepareWiseResumeFixtureSmartTailoring(
     targetResumeId: route.recordId,
     operation: "prepare fixture resume",
   });
+  await input.onFixtureResolved?.(fixture);
   await input.onStage?.("open-fixture");
   if (route.fixtureSelector) {
     await clickWiseResumeControlWithShield({

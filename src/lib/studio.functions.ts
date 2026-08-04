@@ -970,6 +970,25 @@ export const captureDirectedDemo = createServerFn({ method: "POST" })
                     failure_reason: null,
                   });
                 },
+                onFixtureResolved: async (fixture) => {
+                  await context.repository.createDirectorArtifact({
+                    project_id: project.id,
+                    demo_id: demo.id,
+                    artifact_kind: "wiseresume-fixture-reference",
+                    cache_key: boundedArtifactCacheKey(
+                      briefArtifact.cache_key,
+                      "wiseresume-fixture",
+                    ),
+                    status: "ready",
+                    payload_json: serializeWiseResumeFixtureReference(fixture) as Json,
+                    expires_at: null,
+                    provider: "wisedemo",
+                    model: null,
+                    duration_ms: null,
+                    revision: 0,
+                    failure_reason: null,
+                  });
+                },
                 assertPrivacyShield: async (checkpoint) => {
                   privacyShieldCheckpoints.push(
                     await assertPrivacyShieldActive({
@@ -1103,20 +1122,6 @@ export const captureDirectedDemo = createServerFn({ method: "POST" })
         ),
         status: "ready",
         payload_json: preflight.adapterPlan.createControlEvidence as Json,
-        expires_at: null,
-        provider: "wisedemo",
-        model: null,
-        duration_ms: null,
-        revision: 0,
-        failure_reason: null,
-      });
-      await context.repository.createDirectorArtifact({
-        project_id: project.id,
-        demo_id: demo.id,
-        artifact_kind: "wiseresume-fixture-reference",
-        cache_key: boundedArtifactCacheKey(briefArtifact.cache_key, "wiseresume-fixture"),
-        status: "ready",
-        payload_json: serializeWiseResumeFixtureReference(preflight.adapterPlan.fixture) as Json,
         expires_at: null,
         provider: "wisedemo",
         model: null,

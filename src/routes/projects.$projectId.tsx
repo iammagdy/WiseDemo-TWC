@@ -263,6 +263,7 @@ function ProjectStudio() {
     setNotice(null);
     setError(null);
     try {
+      directedRef.current.add(demoId);
       const captured = await captureDirected({ data: { demoId, retryFailed: true } });
       setWorkspace((current) =>
         current
@@ -274,6 +275,7 @@ function ProjectStudio() {
             }
           : current,
       );
+      startPolling(demoId);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Could not retry the directed capture.");
     } finally {
