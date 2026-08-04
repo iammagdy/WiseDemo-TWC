@@ -17,6 +17,10 @@ const STEEL_BASE = "https://api.steel.dev/v1";
 const DEFAULT_CDP_TIMEOUT_MS = 20_000;
 const DEFAULT_STEEL_HTTP_TIMEOUT_MS = 20_000;
 const RELEASE_STEEL_HTTP_TIMEOUT_MS = 10_000;
+// The directed flow reserves 150s for protected bootstrap, 125s for fixture
+// preflight, and 30s for the clean take. Keep a small release margin so the
+// browser cannot expire during an otherwise in-budget capture.
+export const DIRECTED_STEEL_SESSION_TIMEOUT_MS = 360_000;
 const MAX_RECORDING_BYTES = 500 * 1024 * 1024;
 const CDP_READINESS_ATTEMPTS = 7;
 const CDP_READINESS_CONNECT_TIMEOUT_MS = 10_000;
@@ -147,9 +151,8 @@ export async function createSteelSession(
       blockAds: true,
       recordSession: true,
       // Steel's documented field is `timeout`, in milliseconds.
-      // Preserve enough time for protected fixture setup, a short clean take,
-      // and recording retrieval/release without conflating those phases.
-      timeout: 240_000,
+      // This covers the full directed capture budget plus release margin.
+      timeout: DIRECTED_STEEL_SESSION_TIMEOUT_MS,
     }),
   });
 

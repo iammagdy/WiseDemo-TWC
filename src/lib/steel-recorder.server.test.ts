@@ -3,6 +3,7 @@ import test from "node:test";
 import { createFile, type MP4BoxBuffer } from "mp4box";
 
 import {
+  DIRECTED_STEEL_SESSION_TIMEOUT_MS,
   fetchFinalizedHlsMp4,
   finalizeFragmentedMp4,
   listIsoBmffBoxes,
@@ -63,6 +64,12 @@ function fragmentedFixture(): { init: Uint8Array; segments: Uint8Array[] } {
 const fixture = fragmentedFixture();
 const initMp4 = fixture.init;
 const mediaSegment = fixture.segments[0];
+
+test("directed Steel sessions cover every guarded capture phase", () => {
+  // 150s protected bootstrap + 125s preflight + 30s clean take, leaving
+  // time for the session to release after an otherwise in-budget capture.
+  assert.ok(DIRECTED_STEEL_SESSION_TIMEOUT_MS >= 360_000);
+});
 
 const finalizedPlaylist = `#EXTM3U
 #EXT-X-VERSION:7
