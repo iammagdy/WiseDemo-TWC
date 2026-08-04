@@ -624,7 +624,7 @@ export function wiseResumeFixtureRouteExpression(fixtureRecordId: string | null)
     // control but no explicit workspace test id. Treat main as the workspace only
     // when that exact dashboard-owned control is singular and visible; never use
     // a broad page root or a list position as a creation target.
-    const dashboardCreateControls = Array.from(document.querySelectorAll('button[aria-label="New Resume"]')).filter((element) => visible(element) && !(element instanceof HTMLButtonElement && element.disabled) && element.getAttribute("aria-disabled") !== "true");
+    const dashboardCreateControls = Array.from(document.querySelectorAll('[aria-label="New Resume"]')).filter((element) => visible(element) && !(element instanceof HTMLButtonElement && element.disabled) && element.getAttribute("aria-disabled") !== "true");
     const dashboardWorkspaceFallback = routeCategory === "resume-dashboard" && dashboardCreateControls.length === 1 ? dashboardCreateControls[0].closest("main") : null;
     const workspaceDefinition = declaredWorkspaceDefinition || (dashboardWorkspaceFallback ? "main" : null);
     const workspace = declaredWorkspaceDefinition ? document.querySelector(declaredWorkspaceDefinition) : dashboardWorkspaceFallback;
