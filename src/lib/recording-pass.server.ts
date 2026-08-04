@@ -24,7 +24,7 @@ export type DirectedCapturePhaseBudget = {
 // fixture audit and fictional-data preparation can safely take longer than the
 // market-facing interaction without forcing the recording itself to be long.
 export const DEFAULT_DIRECTED_CAPTURE_PHASE_BUDGET: DirectedCapturePhaseBudget = {
-  protectedBootstrapMaxMs: 70_000,
+  protectedBootstrapMaxMs: 150_000,
   preflightMaxMs: 125_000,
   cleanTakeActionMaxMs: 22_000,
   cleanTakeMaxMs: 30_000,
