@@ -4,6 +4,7 @@ import { z } from "zod";
 import { cloneComposition, compositionSchema } from "@/composition/model";
 import { compositionFromTemplate } from "@/composition/templates";
 import type { Json } from "@/integrations/appwrite/types";
+import { assertPublicHttpUrl } from "@/lib/public-url.server";
 
 const projectIdSchema = z.object({ projectId: z.string().uuid() });
 
@@ -139,6 +140,72 @@ export const saveVideoTimeline = createServerFn({ method: "POST" })
       payload_json: { timeline: data.timeline } as Json,
       expires_at: null,
       provider: "wisedemo",
+      model: null,
+      duration_ms: null,
+      revision: 1,
+      failure_reason: null,
+    });
+  });
+
+export const capturePublicWebsiteVideo = createServerFn({ method: "POST" })
+  .inputValidator((data) =>
+    projectIdSchema.extend({ publicUrl: z.string().trim().url().max(2_048) }).parse(data),
+  )
+  .handler(async ({ data }) => {
+    const publicUrl = await assertPublicHttpUrl(data.publicUrl);
+    const { appwriteWorkspace } = await import("@/integrations/appwrite/repository.server");
+    const repository = appwriteWorkspace();
+    const project = await repository.getProject(data.projectId);
+    if (!project) throw new Error("Video project was not found.");
+    const { createSteelSession, fetchSessionMp4, releaseSteelSession, runScenesOverCdp } =
+      await import("@/lib/steel-recorder.server");
+    const session = await createSteelSession(publicUrl.toString(), "english");
+    try {
+      if (!session.websocketUrl) throw new Error("The public capture browser was unavailable.");
+      const execution = await runScenesOverCdp(
+        session.websocketUrl,
+        [
+          { type: "goto", url: publicUrl.toString(), waitMs: 1_500 },
+          { type: "wait", ms: 3_000 },
+          { type: "scroll", deltaY: 520 },
+          { type: "wait", ms: 3_000 },
+          { type: "scroll", deltaY: 420 },
+          { type: "wait", ms: 3_000 },
+        ],
+        25_000,
+      );
+      if (!execution.completed) throw new Error("The public website capture did not complete.");
+    } finally {
+      await releaseSteelSession(session.id).catch(() => undefined);
+    }
+    const recording = await fetchSessionMp4(session.id, { attempts: 10, initialWaitMs: 800 });
+    if (!recording) throw new Error("The public website recording was not finalized.");
+    if (recording.durationSeconds < 8 || recording.durationSeconds > 20) {
+      throw new Error("The public website recording fell outside the 8–20 second proof range.");
+    }
+    const [{ appwriteRecordingStorage }] = await Promise.all([
+      import("@/integrations/appwrite/storage.server"),
+    ]);
+    const fileId = crypto.randomUUID();
+    await appwriteRecordingStorage().upsertRecording(fileId, recording.bytes);
+    return repository.createDirectorArtifact({
+      project_id: project.id,
+      demo_id: null,
+      artifact_kind: "media-asset",
+      cache_key: `public-capture:${fileId.slice(0, 8)}`,
+      status: "ready",
+      payload_json: {
+        source: {
+          kind: "uploaded",
+          fileId,
+          durationSeconds: recording.durationSeconds,
+          width: 1280,
+          height: 800,
+        },
+        provenance: "public-website-capture",
+      } as Json,
+      expires_at: null,
+      provider: "steel.dev",
       model: null,
       duration_ms: null,
       revision: 1,

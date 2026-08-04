@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import {
+  capturePublicWebsiteVideo,
   getVideoStudio,
   renderVideoTimeline,
   saveVideoTimeline,
@@ -22,6 +23,7 @@ function renderUrl(renderId: string) {
 
 export function GenericVideoStudio({ projectId }: { projectId: string }) {
   const loadStudio = useServerFn(getVideoStudio);
+  const captureWebsite = useServerFn(capturePublicWebsiteVideo);
   const saveTimeline = useServerFn(saveVideoTimeline);
   const renderTimeline = useServerFn(renderVideoTimeline);
   const [studio, setStudio] = useState<Studio | null>(null);
@@ -35,7 +37,8 @@ export function GenericVideoStudio({ projectId }: { projectId: string }) {
   const [frame, setFrame] = useState<"minimal-browser" | "premium-laptop" | "clean-saas">(
     "premium-laptop",
   );
-  const [busy, setBusy] = useState<"upload" | "save" | "render" | null>(null);
+  const [publicUrl, setPublicUrl] = useState("https://wiseresume.app");
+  const [busy, setBusy] = useState<"upload" | "capture" | "save" | "render" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -125,6 +128,26 @@ export function GenericVideoStudio({ projectId }: { projectId: string }) {
     }
   }
 
+  async function capturePublicWebsite() {
+    setBusy("capture");
+    setError(null);
+    setNotice(null);
+    try {
+      const asset = await captureWebsite({ data: { projectId, publicUrl } });
+      await load();
+      setAssetId(asset.id);
+      setNotice("Public website capture stored. It used no login and made no third-party changes.");
+    } catch (reason) {
+      setError(
+        reason instanceof Error
+          ? reason.message
+          : "The public website capture could not be completed.",
+      );
+    } finally {
+      setBusy(null);
+    }
+  }
+
   return (
     <div className="min-h-screen bg-background text-foreground">
       <header className="border-b border-border">
@@ -205,6 +228,28 @@ export function GenericVideoStudio({ projectId }: { projectId: string }) {
                 Choose an MP4 to begin. The source is stored as immutable production media.
               </div>
             )}
+            <div className="mt-4 rounded-xl border border-border bg-background/50 p-3">
+              <p className="text-sm font-medium">Or capture a public website</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Landing pages only — no login, credentials, or product mutation.
+              </p>
+              <div className="mt-3 flex gap-2">
+                <input
+                  value={publicUrl}
+                  onChange={(event) => setPublicUrl(event.target.value)}
+                  className="min-w-0 flex-1 rounded-md border border-border bg-background px-3 py-2 text-sm"
+                  aria-label="Public website URL"
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={busy !== null}
+                  onClick={() => void capturePublicWebsite()}
+                >
+                  {busy === "capture" ? "Capturing…" : "Capture"}
+                </Button>
+              </div>
+            </div>
             {selectedSource && (
               <video
                 className="mt-5 aspect-video w-full rounded-xl bg-black"
