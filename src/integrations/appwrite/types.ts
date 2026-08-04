@@ -170,7 +170,11 @@ export type DirectorArtifactKind =
   | "capture-plan"
   | "capture-telemetry"
   | "deterministic-qa"
-  | "gemini-review";
+  | "gemini-review"
+  | "media-asset"
+  | "video-timeline"
+  | "video-render"
+  | "video-render-review";
 
 export type DirectorArtifactRecord = {
   id: string;

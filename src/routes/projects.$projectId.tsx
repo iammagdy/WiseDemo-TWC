@@ -20,6 +20,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { GenericVideoStudio } from "@/components/video-studio/generic-video-studio";
 import { autoComposeDirectedDemo } from "@/lib/composition.functions";
 import {
   analyzePublicProduct,
@@ -57,11 +58,16 @@ export const Route = createFileRoute("/projects/$projectId")({
       { name: "twitter:card", content: "summary_large_image" },
     ],
   }),
-  component: ProjectStudio,
+  component: GenericProjectStudio,
 });
 
 type Workspace = Awaited<ReturnType<typeof getProjectWorkspace>>;
 type Demo = Workspace["demos"][number];
+
+function GenericProjectStudio() {
+  const { projectId } = Route.useParams();
+  return <GenericVideoStudio projectId={projectId} />;
+}
 
 function ProjectStudio() {
   const { projectId } = Route.useParams();

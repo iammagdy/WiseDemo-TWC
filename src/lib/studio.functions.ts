@@ -16,7 +16,7 @@ import {
   isSameOriginUrl,
   maskCredentialIdentifier,
 } from "./credential-crypto.server";
-import { normalizePublicUrl, scanWebsite } from "./studio-scanner.server";
+import { normalizePublicUrl, scanWebsite, type WebsiteScan } from "./studio-scanner.server";
 import { assertProfessionalRecordingDuration, executeRecordingPass } from "./recording-pass.server";
 import { recordingFileId, storeRecordingArtifact } from "./recording-storage.server";
 import {
@@ -130,7 +130,10 @@ function expiresAt(milliseconds: number): string {
 }
 
 function directorFeatureEnabled(): boolean {
-  return serverEnv("WISEDEMO_SINGLE_SESSION_DIRECTOR")?.toLowerCase() !== "false";
+  return (
+    serverEnv("WISEDEMO_EXPERIMENTAL_AUTONOMOUS_CAPTURE")?.toLowerCase() === "true" &&
+    serverEnv("WISEDEMO_SINGLE_SESSION_DIRECTOR")?.toLowerCase() !== "false"
+  );
 }
 
 async function resolvePublicProductIntelligence(
@@ -333,28 +336,37 @@ export const createProject = createServerFn({ method: "POST" })
     z
       .object({
         name: z.string().trim().min(2).max(80),
-        baseUrl: z.string().trim().min(3).max(300),
+        baseUrl: z.string().trim().max(300).optional().default(""),
       })
       .parse(data),
   )
   .handler(async ({ data }) => {
     const context = await workspaceContext();
-    let baseUrl: string;
-    try {
-      baseUrl = normalizePublicUrl(data.baseUrl);
-    } catch {
-      throw new Error("Enter a valid website URL.");
+    const hasUrl = data.baseUrl.trim().length > 0;
+    let baseUrl = "https://example.invalid";
+    let scan: WebsiteScan = {
+      title: data.name,
+      description: "",
+      siteMapMd: "",
+      links: [],
+      authUrl: null,
+    };
+    if (hasUrl) {
+      try {
+        baseUrl = normalizePublicUrl(data.baseUrl);
+      } catch {
+        throw new Error("Enter a valid public website URL.");
+      }
+      scan = await scanWebsite(baseUrl, data.name);
     }
-
-    const scan = await scanWebsite(baseUrl, data.name);
 
     return context.repository.createProject({
       name: data.name,
       base_url: baseUrl,
       description: scan.description,
       site_map_md: scan.siteMapMd,
-      site_map_source: "manual",
-      site_map_updated_at: new Date().toISOString(),
+      site_map_source: hasUrl ? "manual" : null,
+      site_map_updated_at: hasUrl ? new Date().toISOString() : null,
     });
   });
 

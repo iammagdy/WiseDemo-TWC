@@ -30,9 +30,13 @@ npm run dev
 
 ## WiseDemo (this app)
 
-Agentic demo-video studio: point it at a SaaS URL, it scans the site, plans a
-shot list with AI, drives a real cloud browser (Steel.dev) through the product,
-records it, and returns an MP4 you can share.
+Generic product-video studio: upload a real MP4, shape its crop, framing,
+message, and focus beats, then render a downloadable MP4. The default product
+does not request credentials, mutate third-party products, or require a cloud
+browser.
+
+The earlier autonomous browser capture path remains an experimental integration
+behind `WISEDEMO_EXPERIMENTAL_AUTONOMOUS_CAPTURE=true`; it is off by default.
 
 ### No authentication (experimental)
 

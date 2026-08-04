@@ -16,10 +16,13 @@ import { Route as Char91DotmcpChar93ListToolsRouteImport } from './routes/[.mcp]
 import { Route as Char91DotwellKnownChar93OauthProtectedResourceRouteImport } from './routes/[.well-known]/oauth-protected-resource'
 import { Route as ProjectsProjectIdRouteImport } from './routes/projects.$projectId'
 import { Route as Char91DotmcpChar93InvokeToolToolRouteImport } from './routes/[.mcp]/invoke-tool/$tool'
+import { Route as ApiMediaUploadRouteImport } from './routes/api/media/upload'
 import { Route as ApiPublicScreenshotRouteImport } from './routes/api/public/screenshot'
 import { Route as ApiPublicCompositionExportsExportIdRouteImport } from './routes/api/public/composition-exports.$exportId'
 import { Route as ApiPublicDemoRecordingsDemoIdRouteImport } from './routes/api/public/demo-recordings.$demoId'
 import { Route as ApiPublicEvidenceFileIdRouteImport } from './routes/api/public/evidence.$fileId'
+import { Route as ApiPublicMediaAssetIdRouteImport } from './routes/api/public/media.$assetId'
+import { Route as ApiPublicVideoRendersRenderIdRouteImport } from './routes/api/public/video-renders.$renderId'
 import { Route as ProjectsProjectIdDemosDemoIdEditorRouteImport } from './routes/projects.$projectId_.demos.$demoId.editor'
 
 const IndexRoute = IndexRouteImport.update({
@@ -60,6 +63,11 @@ const Char91DotmcpChar93InvokeToolToolRoute =
     path: '/.mcp/invoke-tool/$tool',
     getParentRoute: () => rootRouteImport,
   } as any)
+const ApiMediaUploadRoute = ApiMediaUploadRouteImport.update({
+  id: '/api/media/upload',
+  path: '/api/media/upload',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiPublicScreenshotRoute = ApiPublicScreenshotRouteImport.update({
   id: '/api/public/screenshot',
   path: '/api/public/screenshot',
@@ -82,6 +90,17 @@ const ApiPublicEvidenceFileIdRoute = ApiPublicEvidenceFileIdRouteImport.update({
   path: '/api/public/evidence/$fileId',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiPublicMediaAssetIdRoute = ApiPublicMediaAssetIdRouteImport.update({
+  id: '/api/public/media/$assetId',
+  path: '/api/public/media/$assetId',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiPublicVideoRendersRenderIdRoute =
+  ApiPublicVideoRendersRenderIdRouteImport.update({
+    id: '/api/public/video-renders/$renderId',
+    path: '/api/public/video-renders/$renderId',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ProjectsProjectIdDemosDemoIdEditorRoute =
   ProjectsProjectIdDemosDemoIdEditorRouteImport.update({
     id: '/projects/$projectId_/demos/$demoId/editor',
@@ -97,10 +116,13 @@ export interface FileRoutesByFullPath {
   '/.well-known/oauth-protected-resource': typeof Char91DotwellKnownChar93OauthProtectedResourceRoute
   '/projects/$projectId': typeof ProjectsProjectIdRoute
   '/.mcp/invoke-tool/$tool': typeof Char91DotmcpChar93InvokeToolToolRoute
+  '/api/media/upload': typeof ApiMediaUploadRoute
   '/api/public/screenshot': typeof ApiPublicScreenshotRoute
   '/api/public/composition-exports/$exportId': typeof ApiPublicCompositionExportsExportIdRoute
   '/api/public/demo-recordings/$demoId': typeof ApiPublicDemoRecordingsDemoIdRoute
   '/api/public/evidence/$fileId': typeof ApiPublicEvidenceFileIdRoute
+  '/api/public/media/$assetId': typeof ApiPublicMediaAssetIdRoute
+  '/api/public/video-renders/$renderId': typeof ApiPublicVideoRendersRenderIdRoute
   '/projects/$projectId/demos/$demoId/editor': typeof ProjectsProjectIdDemosDemoIdEditorRoute
 }
 export interface FileRoutesByTo {
@@ -111,10 +133,13 @@ export interface FileRoutesByTo {
   '/.well-known/oauth-protected-resource': typeof Char91DotwellKnownChar93OauthProtectedResourceRoute
   '/projects/$projectId': typeof ProjectsProjectIdRoute
   '/.mcp/invoke-tool/$tool': typeof Char91DotmcpChar93InvokeToolToolRoute
+  '/api/media/upload': typeof ApiMediaUploadRoute
   '/api/public/screenshot': typeof ApiPublicScreenshotRoute
   '/api/public/composition-exports/$exportId': typeof ApiPublicCompositionExportsExportIdRoute
   '/api/public/demo-recordings/$demoId': typeof ApiPublicDemoRecordingsDemoIdRoute
   '/api/public/evidence/$fileId': typeof ApiPublicEvidenceFileIdRoute
+  '/api/public/media/$assetId': typeof ApiPublicMediaAssetIdRoute
+  '/api/public/video-renders/$renderId': typeof ApiPublicVideoRendersRenderIdRoute
   '/projects/$projectId/demos/$demoId/editor': typeof ProjectsProjectIdDemosDemoIdEditorRoute
 }
 export interface FileRoutesById {
@@ -126,10 +151,13 @@ export interface FileRoutesById {
   '/.well-known/oauth-protected-resource': typeof Char91DotwellKnownChar93OauthProtectedResourceRoute
   '/projects/$projectId': typeof ProjectsProjectIdRoute
   '/.mcp/invoke-tool/$tool': typeof Char91DotmcpChar93InvokeToolToolRoute
+  '/api/media/upload': typeof ApiMediaUploadRoute
   '/api/public/screenshot': typeof ApiPublicScreenshotRoute
   '/api/public/composition-exports/$exportId': typeof ApiPublicCompositionExportsExportIdRoute
   '/api/public/demo-recordings/$demoId': typeof ApiPublicDemoRecordingsDemoIdRoute
   '/api/public/evidence/$fileId': typeof ApiPublicEvidenceFileIdRoute
+  '/api/public/media/$assetId': typeof ApiPublicMediaAssetIdRoute
+  '/api/public/video-renders/$renderId': typeof ApiPublicVideoRendersRenderIdRoute
   '/projects/$projectId_/demos/$demoId/editor': typeof ProjectsProjectIdDemosDemoIdEditorRoute
 }
 export interface FileRouteTypes {
@@ -142,10 +170,13 @@ export interface FileRouteTypes {
     | '/.well-known/oauth-protected-resource'
     | '/projects/$projectId'
     | '/.mcp/invoke-tool/$tool'
+    | '/api/media/upload'
     | '/api/public/screenshot'
     | '/api/public/composition-exports/$exportId'
     | '/api/public/demo-recordings/$demoId'
     | '/api/public/evidence/$fileId'
+    | '/api/public/media/$assetId'
+    | '/api/public/video-renders/$renderId'
     | '/projects/$projectId/demos/$demoId/editor'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -156,10 +187,13 @@ export interface FileRouteTypes {
     | '/.well-known/oauth-protected-resource'
     | '/projects/$projectId'
     | '/.mcp/invoke-tool/$tool'
+    | '/api/media/upload'
     | '/api/public/screenshot'
     | '/api/public/composition-exports/$exportId'
     | '/api/public/demo-recordings/$demoId'
     | '/api/public/evidence/$fileId'
+    | '/api/public/media/$assetId'
+    | '/api/public/video-renders/$renderId'
     | '/projects/$projectId/demos/$demoId/editor'
   id:
     | '__root__'
@@ -170,10 +204,13 @@ export interface FileRouteTypes {
     | '/.well-known/oauth-protected-resource'
     | '/projects/$projectId'
     | '/.mcp/invoke-tool/$tool'
+    | '/api/media/upload'
     | '/api/public/screenshot'
     | '/api/public/composition-exports/$exportId'
     | '/api/public/demo-recordings/$demoId'
     | '/api/public/evidence/$fileId'
+    | '/api/public/media/$assetId'
+    | '/api/public/video-renders/$renderId'
     | '/projects/$projectId_/demos/$demoId/editor'
   fileRoutesById: FileRoutesById
 }
@@ -185,10 +222,13 @@ export interface RootRouteChildren {
   Char91DotwellKnownChar93OauthProtectedResourceRoute: typeof Char91DotwellKnownChar93OauthProtectedResourceRoute
   ProjectsProjectIdRoute: typeof ProjectsProjectIdRoute
   Char91DotmcpChar93InvokeToolToolRoute: typeof Char91DotmcpChar93InvokeToolToolRoute
+  ApiMediaUploadRoute: typeof ApiMediaUploadRoute
   ApiPublicScreenshotRoute: typeof ApiPublicScreenshotRoute
   ApiPublicCompositionExportsExportIdRoute: typeof ApiPublicCompositionExportsExportIdRoute
   ApiPublicDemoRecordingsDemoIdRoute: typeof ApiPublicDemoRecordingsDemoIdRoute
   ApiPublicEvidenceFileIdRoute: typeof ApiPublicEvidenceFileIdRoute
+  ApiPublicMediaAssetIdRoute: typeof ApiPublicMediaAssetIdRoute
+  ApiPublicVideoRendersRenderIdRoute: typeof ApiPublicVideoRendersRenderIdRoute
   ProjectsProjectIdDemosDemoIdEditorRoute: typeof ProjectsProjectIdDemosDemoIdEditorRoute
 }
 
@@ -243,6 +283,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof Char91DotmcpChar93InvokeToolToolRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/media/upload': {
+      id: '/api/media/upload'
+      path: '/api/media/upload'
+      fullPath: '/api/media/upload'
+      preLoaderRoute: typeof ApiMediaUploadRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/public/screenshot': {
       id: '/api/public/screenshot'
       path: '/api/public/screenshot'
@@ -271,6 +318,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiPublicEvidenceFileIdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/public/media/$assetId': {
+      id: '/api/public/media/$assetId'
+      path: '/api/public/media/$assetId'
+      fullPath: '/api/public/media/$assetId'
+      preLoaderRoute: typeof ApiPublicMediaAssetIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/public/video-renders/$renderId': {
+      id: '/api/public/video-renders/$renderId'
+      path: '/api/public/video-renders/$renderId'
+      fullPath: '/api/public/video-renders/$renderId'
+      preLoaderRoute: typeof ApiPublicVideoRendersRenderIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/projects/$projectId_/demos/$demoId/editor': {
       id: '/projects/$projectId_/demos/$demoId/editor'
       path: '/projects/$projectId/demos/$demoId/editor'
@@ -290,11 +351,14 @@ const rootRouteChildren: RootRouteChildren = {
     Char91DotwellKnownChar93OauthProtectedResourceRoute,
   ProjectsProjectIdRoute: ProjectsProjectIdRoute,
   Char91DotmcpChar93InvokeToolToolRoute: Char91DotmcpChar93InvokeToolToolRoute,
+  ApiMediaUploadRoute: ApiMediaUploadRoute,
   ApiPublicScreenshotRoute: ApiPublicScreenshotRoute,
   ApiPublicCompositionExportsExportIdRoute:
     ApiPublicCompositionExportsExportIdRoute,
   ApiPublicDemoRecordingsDemoIdRoute: ApiPublicDemoRecordingsDemoIdRoute,
   ApiPublicEvidenceFileIdRoute: ApiPublicEvidenceFileIdRoute,
+  ApiPublicMediaAssetIdRoute: ApiPublicMediaAssetIdRoute,
+  ApiPublicVideoRendersRenderIdRoute: ApiPublicVideoRendersRenderIdRoute,
   ProjectsProjectIdDemosDemoIdEditorRoute:
     ProjectsProjectIdDemosDemoIdEditorRoute,
 }

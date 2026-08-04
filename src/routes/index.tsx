@@ -4,7 +4,7 @@ import { Landing } from "@/components/landing/Landing";
 export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
-      { title: "WiseDemo — Cinematic product demos, filmed by AI in 60 seconds" },
+      { title: "WiseDemo — Cinematic product videos from real clips" },
       {
         name: "description",
         content:
@@ -13,8 +13,7 @@ export const Route = createFileRoute("/")({
       { property: "og:title", content: "WiseDemo — Cinematic product demos, filmed by AI" },
       {
         property: "og:description",
-        content:
-          "An autonomous browser records a real, polished ≤60s demo of your SaaS. Built for solo founders.",
+        content: "Turn real product clips into polished, editable, downloadable launch videos.",
       },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },

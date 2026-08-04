@@ -758,6 +758,14 @@ export class WiseDemoRepository {
     }
   }
 
+  async getDirectorArtifact(artifactId: string): Promise<DirectorArtifactRecord | null> {
+    const row = await this.#getWorkspaceRow<DirectorArtifactRow>(
+      this.#config.directorArtifactsTableId,
+      artifactId,
+    );
+    return row ? directorArtifactFromRow(row) : null;
+  }
+
   async listDirectorArtifactsByKind(
     projectId: string,
     artifactKind: DirectorArtifactKind,

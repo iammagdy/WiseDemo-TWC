@@ -94,9 +94,8 @@ export function Landing() {
               in 60&nbsp;seconds.
             </h1>
             <p className="mt-6 max-w-xl text-base leading-relaxed text-muted-foreground sm:text-lg">
-              Drop your URL. WiseDemo maps your product, scripts the flow with AI, drives a real
-              browser, and hands you a cinematic ≤60-second demo — ready for X, LinkedIn, and
-              Product Hunt.
+              Drop in a real product clip. WiseDemo turns it into a cinematic, editable launch cut —
+              ready for X, LinkedIn, and Product Hunt.
             </p>
 
             <form
@@ -154,7 +153,7 @@ export function Landing() {
               </div>
               <img
                 src={heroImage}
-                alt="WiseDemo autonomous agent clicking a New Project button in a dark SaaS UI"
+                alt="WiseDemo product video framed for a polished launch cut"
                 width={1600}
                 height={900}
                 className="aspect-[16/10] w-full object-cover"
@@ -373,8 +372,8 @@ const STEPS = [
     icon: IconScan,
   },
   {
-    title: "Write the script",
-    body: "Gemini turns the map into a 60-second shot list with beats, captions, and clicks.",
+    title: "Shape the story",
+    body: "Use AI-assisted hooks, captions, and focus beats to make one real product moment land.",
     icon: IconScript,
   },
   {

@@ -157,7 +157,7 @@ function EmptyState({ onNew }: { onNew: () => void }) {
       </div>
       <h2 className="text-xl font-semibold tracking-tight">The set is empty.</h2>
       <p className="mx-auto mt-2 max-w-sm text-sm text-muted-foreground">
-        Add your first SaaS URL and WiseDemo will map, script, and film a 60-second cut.
+        Add a production, upload a real clip, and shape a launch-ready cut.
       </p>
       <Button onClick={onNew} className="mt-6">
         <Plus />
@@ -205,7 +205,8 @@ function NewProjectDialog({ onClose, onCreated }: { onClose: () => void; onCreat
         </p>
         <h2 className="mt-2 text-xl font-semibold tracking-tight">Add a project</h2>
         <p className="mt-1 text-sm text-muted-foreground">
-          We'll map the site next. You can add login credentials later.
+          Start with a project name. A public URL is optional, and the default workflow never needs
+          product credentials.
         </p>
 
         <div className="mt-5 space-y-3">
@@ -224,12 +225,11 @@ function NewProjectDialog({ onClose, onCreated }: { onClose: () => void; onCreat
           </label>
           <label className="block">
             <span className="mb-1.5 block font-mono-tight text-[11px] uppercase tracking-widest text-muted-foreground">
-              Site URL
+              Public website URL (optional)
             </span>
             <div className="flex items-center rounded-lg border border-border bg-background focus-within:border-primary/60 focus-within:ring-2 focus-within:ring-primary/20">
               <span className="pl-3 font-mono-tight text-xs text-muted-foreground">https://</span>
               <input
-                required
                 value={url}
                 onChange={(e) => setUrl(e.target.value)}
                 placeholder="yoursaas.com"
