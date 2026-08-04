@@ -1,8 +1,9 @@
 import type { CdpAction, SceneExecutionResult } from "./steel-recorder.server.ts";
 import {
+  DEFAULT_DIRECTED_CAPTURE_PHASE_BUDGET,
   executeWithinBudget,
-  recordingActionBudgetMs,
   recordingHoldMs,
+  type DirectedCapturePhaseBudget,
   type RecordingSessionLike,
 } from "./recording-pass.server.ts";
 
@@ -100,7 +101,7 @@ export async function runSingleSessionDirectedCapture<
     execution: SceneExecutionResult,
   ) => Promise<Verification>;
   finalActions: CdpAction[] | ((preflight: Preflight) => CdpAction[]);
-  preflightMaxMs?: number;
+  phaseBudget?: Partial<DirectedCapturePhaseBudget>;
   sleep?: (milliseconds: number) => Promise<unknown>;
   now?: () => number;
 }): Promise<{
@@ -118,6 +119,7 @@ export async function runSingleSessionDirectedCapture<
     options.sleep ??
     ((milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
   const sessionStartedAtMs = now();
+  const phaseBudget = { ...DEFAULT_DIRECTED_CAPTURE_PHASE_BUDGET, ...options.phaseBudget };
   let session: Session | null = null;
   let released = false;
   let privacyShield: PrivacyShield | undefined;
@@ -127,44 +129,72 @@ export async function runSingleSessionDirectedCapture<
       throw new Error("The Steel session did not provide a browser connection.");
     const websocketUrl = session.websocketUrl;
     await options.publishLiveSession(session);
-    if (options.installPrivacyShield)
-      privacyShield = await options.installPrivacyShield(websocketUrl);
-    if (options.assertPrivacyShield) {
-      await options.assertPrivacyShield(websocketUrl, "after-session-creation");
-      await options.assertPrivacyShield(websocketUrl, "before-login-navigation");
-    }
-    if (options.authenticate)
-      await options.authenticate(websocketUrl, {
-        productLoginUrl: options.productLoginUrl,
-        productStartUrl: options.productStartUrl,
-      });
-    if (options.assertPrivacyShield)
-      await options.assertPrivacyShield(websocketUrl, "before-account-audit");
-    const liveAccountSafetyAudit = options.liveAccountSafetyAudit
-      ? await options.liveAccountSafetyAudit(websocketUrl)
-      : undefined;
-    options.assertMutationAllowed?.(liveAccountSafetyAudit);
-    if (options.assertPrivacyShield)
-      await options.assertPrivacyShield(websocketUrl, "before-fixture-discovery");
-    const preflight = await executeWithinBudget(
-      () =>
-        options.preflight(websocketUrl, options.preflightMaxMs ?? 20_000, liveAccountSafetyAudit),
-      options.preflightMaxMs ?? 20_000,
+    const protectedSetup = await executeWithinBudget(
+      async () => {
+        if (options.installPrivacyShield)
+          privacyShield = await options.installPrivacyShield(websocketUrl);
+        if (options.assertPrivacyShield) {
+          await options.assertPrivacyShield(websocketUrl, "after-session-creation");
+          await options.assertPrivacyShield(websocketUrl, "before-login-navigation");
+        }
+        if (options.authenticate)
+          await options.authenticate(websocketUrl, {
+            productLoginUrl: options.productLoginUrl,
+            productStartUrl: options.productStartUrl,
+          });
+        if (options.assertPrivacyShield)
+          await options.assertPrivacyShield(websocketUrl, "before-account-audit");
+        const liveAccountSafetyAudit = options.liveAccountSafetyAudit
+          ? await options.liveAccountSafetyAudit(websocketUrl)
+          : undefined;
+        options.assertMutationAllowed?.(liveAccountSafetyAudit);
+        if (options.assertPrivacyShield)
+          await options.assertPrivacyShield(websocketUrl, "before-fixture-discovery");
+        const preflight = await executeWithinBudget(
+          () => options.preflight(websocketUrl, phaseBudget.preflightMaxMs, liveAccountSafetyAudit),
+          phaseBudget.preflightMaxMs,
+          {
+            code: "PROTECTED_PREFLIGHT_TIMEOUT",
+            message: "Protected fixture preparation exceeded its safe setup budget.",
+          },
+        );
+        return { liveAccountSafetyAudit, preflight };
+      },
+      phaseBudget.protectedSetupMaxMs,
+      {
+        code: "PROTECTED_SETUP_TIMEOUT",
+        message: "Protected setup exceeded its safe session budget before the clean take.",
+      },
     );
+    const { liveAccountSafetyAudit, preflight } = protectedSetup;
     if (options.removePrivacyShield)
       await options.removePrivacyShield(websocketUrl, preflight, privacyShield);
     const takeStartedAtMs = now();
-    const execution = await executeWithinBudget(
-      () => options.executeFinalTake(websocketUrl, recordingActionBudgetMs(0), preflight),
-      recordingActionBudgetMs(0),
+    const { execution, verification } = await executeWithinBudget(
+      async () => {
+        const execution = await executeWithinBudget(
+          () => options.executeFinalTake(websocketUrl, phaseBudget.cleanTakeActionMaxMs, preflight),
+          phaseBudget.cleanTakeActionMaxMs,
+          {
+            code: "CLEAN_TAKE_ACTION_TIMEOUT",
+            message: "The clean feature interaction exceeded its safe take budget.",
+          },
+        );
+        if (!execution.completed)
+          throw new Error(execution.error ?? "The directed final take did not complete.");
+        const verification = options.verifyFinalTake
+          ? await options.verifyFinalTake(websocketUrl, preflight, execution)
+          : undefined;
+        const holdMs = recordingHoldMs(now() - takeStartedAtMs, phaseBudget.cleanTakeTargetMs);
+        if (holdMs > 0) await sleep(holdMs);
+        return { execution, verification };
+      },
+      phaseBudget.cleanTakeMaxMs,
+      {
+        code: "CLEAN_TAKE_TIMEOUT",
+        message: "The clean feature take exceeded its safe duration budget.",
+      },
     );
-    if (!execution.completed)
-      throw new Error(execution.error ?? "The directed final take did not complete.");
-    const verification = options.verifyFinalTake
-      ? await options.verifyFinalTake(websocketUrl, preflight, execution)
-      : undefined;
-    const holdMs = recordingHoldMs(now() - takeStartedAtMs);
-    if (holdMs > 0) await sleep(holdMs);
     const takeEndedAtMs = now();
     const releasedSession = await options.releaseSession(session.id);
     released = true;

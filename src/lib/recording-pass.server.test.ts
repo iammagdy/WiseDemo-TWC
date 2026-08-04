@@ -102,8 +102,9 @@ test("enforces a safe action budget and finalized professional duration", () => 
   );
   assert.doesNotThrow(() => assertProfessionalRecordingDuration(45));
   assert.doesNotThrow(() => assertProfessionalRecordingDuration(69));
+  assert.doesNotThrow(() => assertProfessionalRecordingDuration(10));
   assert.throws(
-    () => assertProfessionalRecordingDuration(44),
+    () => assertProfessionalRecordingDuration(7),
     (error) =>
       error instanceof RecordingPassError && error.code === "RECORDING_DURATION_OUT_OF_RANGE",
   );

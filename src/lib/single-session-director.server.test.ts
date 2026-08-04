@@ -84,6 +84,29 @@ test("directed capture verifies the final take before recording its end marker",
   assert.ok(result.markers.takeEndedAtMs >= 500);
 });
 
+test("directed capture uses separate protected setup and clean-take budgets", async () => {
+  let preflightBudget = 0;
+  let takeBudget = 0;
+  await runSingleSessionDirectedCapture({
+    sessionBootstrapUrl: "about:blank",
+    createSession: async () => ({ id: "steel-1", websocketUrl: "ws://steel" }),
+    releaseSession: async () => ({ id: "steel-1" }),
+    publishLiveSession: async () => undefined,
+    preflight: async (_websocketUrl, maxWallMs) => {
+      preflightBudget = maxWallMs;
+      return "prepared";
+    },
+    executeFinalTake: async (_websocketUrl, maxWallMs) => {
+      takeBudget = maxWallMs;
+      return { executed: 1, completed: true, diagnostics: [] };
+    },
+    finalActions: [],
+    sleep: async () => undefined,
+  });
+  assert.equal(preflightBudget, 75_000);
+  assert.equal(takeBudget, 22_000);
+});
+
 test("unsafe live safety audit releases the only session before mutation", async () => {
   let created = 0;
   let released = 0;

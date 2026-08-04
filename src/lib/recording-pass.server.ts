@@ -1,10 +1,32 @@
-export const PROFESSIONAL_RECORDING_MIN_SECONDS = 45;
+// A short, evidence-rich feature advertisement is a valid production format.
+// Keep the raw recording bounds broad enough for both a short ad and a longer
+// walkthrough; the creative brief decides the editorial duration.
+export const PROFESSIONAL_RECORDING_MIN_SECONDS = 8;
 export const PROFESSIONAL_RECORDING_MAX_SECONDS = 69;
 export const RECORDING_TARGET_MS = 50_000;
 export const RECORDING_MAX_WALL_MS = 65_000;
 
 const RELEASE_RESERVE_MS = 3_000;
 const MIN_ACTION_BUDGET_MS = 8_000;
+
+export type DirectedCapturePhaseBudget = {
+  protectedSetupMaxMs: number;
+  preflightMaxMs: number;
+  cleanTakeActionMaxMs: number;
+  cleanTakeMaxMs: number;
+  cleanTakeTargetMs: number;
+};
+
+// These limits deliberately separate protected setup from the clean take. A
+// fixture audit and fictional-data preparation can safely take longer than the
+// market-facing interaction without forcing the recording itself to be long.
+export const DEFAULT_DIRECTED_CAPTURE_PHASE_BUDGET: DirectedCapturePhaseBudget = {
+  protectedSetupMaxMs: 110_000,
+  preflightMaxMs: 75_000,
+  cleanTakeActionMaxMs: 22_000,
+  cleanTakeMaxMs: 30_000,
+  cleanTakeTargetMs: 15_000,
+};
 
 export type RecordingSessionLike = {
   id: string;
@@ -42,8 +64,8 @@ export function recordingActionBudgetMs(elapsedMs: number): number {
   return Math.min(55_000, available);
 }
 
-export function recordingHoldMs(elapsedMs: number): number {
-  return Math.max(0, RECORDING_TARGET_MS - Math.max(0, elapsedMs));
+export function recordingHoldMs(elapsedMs: number, targetMs = RECORDING_TARGET_MS): number {
+  return Math.max(0, targetMs - Math.max(0, elapsedMs));
 }
 
 export function assertProfessionalRecordingDuration(durationSeconds: number): void {
@@ -62,6 +84,7 @@ export function assertProfessionalRecordingDuration(durationSeconds: number): vo
 export async function executeWithinBudget<Execution>(
   execute: () => Promise<Execution>,
   budgetMs: number,
+  timeout?: { code: string; message: string },
 ): Promise<Execution> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
@@ -72,8 +95,8 @@ export async function executeWithinBudget<Execution>(
           () =>
             reject(
               new RecordingPassError(
-                "RECORDING_WALL_CLOCK_TIMEOUT",
-                "The walkthrough exceeded its safe recording time budget.",
+                timeout?.code ?? "RECORDING_WALL_CLOCK_TIMEOUT",
+                timeout?.message ?? "The walkthrough exceeded its safe recording time budget.",
               ),
             ),
           budgetMs,

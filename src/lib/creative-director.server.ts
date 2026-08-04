@@ -25,7 +25,7 @@ export const creativeBriefSchema = z.object({
   hook: text(220),
   proofStatement: text(360),
   callToAction: text(220),
-  targetDurationSeconds: z.number().int().min(30).max(69),
+  targetDurationSeconds: z.number().int().min(8).max(69),
   captureMode: z.enum(["desktop", "mobile"]),
   demoDataPlan: z.object({
     persona: text(240),
@@ -95,7 +95,7 @@ export const creativeBriefJsonSchema = {
     hook: { type: "string" },
     proofStatement: { type: "string" },
     callToAction: { type: "string" },
-    targetDurationSeconds: { type: "integer", minimum: 30, maximum: 69 },
+    targetDurationSeconds: { type: "integer", minimum: 8, maximum: 69 },
     captureMode: { type: "string", enum: ["desktop", "mobile"] },
     selectedFeature: {
       type: "object",
