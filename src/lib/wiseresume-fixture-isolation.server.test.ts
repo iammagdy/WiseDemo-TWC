@@ -392,10 +392,11 @@ test("fixture preparation reports only fixed stage names", async () => {
       },
     }),
   );
-  assert.deepEqual(stages.slice(0, 3), [
+  assert.deepEqual(stages.slice(0, 4), [
     "reveal-creation-control",
     "resolve-fixture-workspace",
     "create-or-reuse-fixture",
+    "create-fixture-before-click",
   ]);
 });
 

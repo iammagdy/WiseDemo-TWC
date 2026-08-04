@@ -107,6 +107,62 @@ test("directed capture uses separate protected setup and clean-take budgets", as
   assert.equal(takeBudget, 22_000);
 });
 
+test("fixture preflight retains its full budget after protected bootstrap", async () => {
+  let preflightCalled = false;
+  await runSingleSessionDirectedCapture({
+    sessionBootstrapUrl: "about:blank",
+    createSession: async () => ({ id: "steel-1", websocketUrl: "ws://steel" }),
+    releaseSession: async () => ({ id: "steel-1" }),
+    publishLiveSession: async () => undefined,
+    installPrivacyShield: async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      return { shield: true };
+    },
+    preflight: async () => {
+      preflightCalled = true;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      return "prepared";
+    },
+    executeFinalTake: async () => ({ executed: 1, completed: true, diagnostics: [] }),
+    finalActions: [],
+    phaseBudget: {
+      protectedBootstrapMaxMs: 30,
+      preflightMaxMs: 30,
+    },
+    sleep: async () => undefined,
+  });
+  assert.equal(preflightCalled, true);
+});
+
+test("a preflight timeout aborts its guarded work before session release", async () => {
+  let released = 0;
+  let signalWasAborted = false;
+  await assert.rejects(
+    runSingleSessionDirectedCapture({
+      sessionBootstrapUrl: "about:blank",
+      createSession: async () => ({ id: "steel-1", websocketUrl: "ws://steel" }),
+      releaseSession: async () => {
+        released += 1;
+        return { id: "steel-1" };
+      },
+      publishLiveSession: async () => undefined,
+      preflight: async (_websocketUrl, _maxWallMs, _audit, signal) => {
+        await new Promise((resolve) => setTimeout(resolve, 15));
+        signalWasAborted = signal.aborted;
+        if (signal.aborted) throw signal.reason;
+        return "prepared";
+      },
+      executeFinalTake: async () => ({ executed: 1, completed: true, diagnostics: [] }),
+      finalActions: [],
+      phaseBudget: { preflightMaxMs: 5 },
+    }),
+    /Protected fixture preparation exceeded/,
+  );
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(signalWasAborted, true);
+  assert.equal(released, 1);
+});
+
 test("unsafe live safety audit releases the only session before mutation", async () => {
   let created = 0;
   let released = 0;

@@ -683,27 +683,38 @@ async function applyLocalePersistenceHints(
   return true;
 }
 
-function productLocaleAdapterContext(cdp: Cdp): ProductLocaleAdapterContext {
+function productLocaleAdapterContext(cdp: Cdp, signal?: AbortSignal): ProductLocaleAdapterContext {
   return {
     evaluate: (expression) => evaluate(cdp, expression),
     delay,
     waitUntil: (expression, timeoutMs) => waitUntil(cdp, expression, timeoutMs),
     goto: (url, settleMs) => goto(cdp, url, settleMs),
+    assertActive: () => {
+      if (!signal?.aborted) return;
+      throw signal.reason instanceof Error
+        ? signal.reason
+        : new Error("The directed capture phase was cancelled before another product action.");
+    },
   };
 }
 
 export async function withProductLocaleAdapterContext<T>(input: {
   websocketUrl: string;
   recordingLocale: RecordingLocale;
+  signal?: AbortSignal;
   onLocaleDiagnostic?: (diagnostic: RecordingLocaleDiagnostic) => Promise<void> | void;
   execute: (context: ProductLocaleAdapterContext) => Promise<T>;
 }): Promise<T> {
+  if (input.signal?.aborted)
+    throw input.signal.reason instanceof Error
+      ? input.signal.reason
+      : new Error("The directed capture phase was cancelled before browser attachment.");
   const cdp = await attach(input.websocketUrl, input.recordingLocale, {
     localeMode: "verify",
     onLocaleDiagnostic: input.onLocaleDiagnostic,
   });
   try {
-    return await input.execute(productLocaleAdapterContext(cdp));
+    return await input.execute(productLocaleAdapterContext(cdp, input.signal));
   } finally {
     try {
       cdp.socket.close();

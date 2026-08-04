@@ -31,6 +31,7 @@ export type ProductLocaleAdapterContext = {
   delay: (milliseconds: number) => Promise<unknown>;
   waitUntil: (expression: string, timeoutMs: number) => Promise<boolean>;
   goto: (url: string, settleMs: number) => Promise<void>;
+  assertActive?: () => void;
 };
 
 const WISE_RESUME_CREATION_CONTROL_REVEAL_SELECTOR = [
@@ -81,6 +82,9 @@ export type WiseResumeFixturePreparationStage =
   | "reveal-creation-control"
   | "resolve-fixture-workspace"
   | "create-or-reuse-fixture"
+  | "create-fixture-before-click"
+  | "create-fixture-transition"
+  | "resolve-created-fixture"
   | "open-fixture"
   | "write-fictional-resume"
   | "open-tailoring-workflow"
@@ -1127,7 +1131,9 @@ async function clickWiseResumeControlWithShield(input: {
   assertPrivacyShield: ((checkpoint: string) => Promise<void>) | undefined;
   expectedTransition: string;
   transitionError: string;
+  onActionCompleted?: () => Promise<void> | void;
 }): Promise<void> {
+  input.context.assertActive?.();
   const beforeUrl = await input.context.evaluate("location.href");
   if (typeof beforeUrl !== "string") throw new Error(input.transitionError);
   let clicked: unknown;
@@ -1136,10 +1142,13 @@ async function clickWiseResumeControlWithShield(input: {
     checkpointAfter: input.checkpointAfter,
     assertPrivacyShield: input.assertPrivacyShield,
     action: async () => {
+      input.context.assertActive?.();
       clicked = await input.context.evaluate(
         `(() => { const target = document.querySelector(${JSON.stringify(input.selector)}); if (!target) return false; target.click(); return true; })()`,
       );
       if (clicked !== true) throw new Error("WiseResume control was not actionable.");
+      input.context.assertActive?.();
+      await input.onActionCompleted?.();
     },
     waitForTransition: async () => {
       const transitioned = await input.context.waitUntil(
@@ -1147,11 +1156,13 @@ async function clickWiseResumeControlWithShield(input: {
         12_000,
       );
       if (!transitioned) throw new Error(input.transitionError);
+      input.context.assertActive?.();
       const settled = await input.context.waitUntil(
         'document.readyState === "interactive" || document.readyState === "complete"',
         12_000,
       );
       if (!settled) throw new Error(input.transitionError);
+      input.context.assertActive?.();
     },
   });
 }
@@ -1281,17 +1292,26 @@ async function createWiseResumeFixture(
   selector: string,
   accountFingerprint: string,
   assertPrivacyShield: ((checkpoint: string) => Promise<void>) | undefined,
+  onStage: ((stage: WiseResumeFixturePreparationStage) => Promise<void> | void) | undefined,
 ): Promise<{ fixture: WiseResumeFixtureReference; resumeUrl: string }> {
+  context.assertActive?.();
+  await onStage?.("create-fixture-before-click");
   await clickWiseResumeControlWithShield({
     context,
     selector,
     checkpointBefore: "before-fixture-creation-click",
     checkpointAfter: "after-fixture-creation-transition",
     assertPrivacyShield,
+    onActionCompleted: async () => {
+      context.assertActive?.();
+      await onStage?.("create-fixture-transition");
+    },
     expectedTransition:
       'document.querySelector("textarea, [contenteditable=true], input[name*=resume], [data-testid*=editor]") !== null',
     transitionError: "WiseResume fixture creation did not reach a new fixture editor.",
   });
+  context.assertActive?.();
+  await onStage?.("resolve-created-fixture");
   const resumeUrl = await context.evaluate("location.href");
   if (typeof resumeUrl !== "string")
     throw new Error("WiseResume fixture route could not be resolved.");
@@ -1386,6 +1406,7 @@ export async function prepareWiseResumeFixtureSmartTailoring(
         route.createSelector,
         input.accountFingerprint,
         input.assertPrivacyShield,
+        input.onStage,
       );
       fixture = created.fixture;
       resumeUrl = created.resumeUrl;

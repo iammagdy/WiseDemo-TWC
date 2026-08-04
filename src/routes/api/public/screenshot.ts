@@ -7,12 +7,15 @@ export const Route = createFileRoute("/api/public/screenshot")({
         const requestUrl = new URL(request.url);
         const target = requestUrl.searchParams.get("url") ?? "";
         const widthParam = Number(requestUrl.searchParams.get("width") ?? "1280");
-        const width = Number.isFinite(widthParam) ? Math.min(Math.max(Math.round(widthParam), 640), 1600) : 1280;
+        const width = Number.isFinite(widthParam)
+          ? Math.min(Math.max(Math.round(widthParam), 640), 1600)
+          : 1280;
 
         let targetUrl: URL;
         try {
           targetUrl = new URL(/^https?:\/\//i.test(target) ? target : `https://${target}`);
-          if (targetUrl.protocol !== "http:" && targetUrl.protocol !== "https:") throw new Error("Unsupported protocol");
+          if (targetUrl.protocol !== "http:" && targetUrl.protocol !== "https:")
+            throw new Error("Unsupported protocol");
           if (targetUrl.toString().length > 500) throw new Error("URL too long");
         } catch {
           return svgFallback("Invalid website URL", 400);

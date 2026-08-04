@@ -10,7 +10,10 @@ const RELEASE_RESERVE_MS = 3_000;
 const MIN_ACTION_BUDGET_MS = 8_000;
 
 export type DirectedCapturePhaseBudget = {
-  protectedSetupMaxMs: number;
+  // Bootstrap covers the shield, authentication, and read-only account audit.
+  // Fixture preflight is deliberately independent so bootstrap latency cannot
+  // consume the time reserved for a guarded creation action.
+  protectedBootstrapMaxMs: number;
   preflightMaxMs: number;
   cleanTakeActionMaxMs: number;
   cleanTakeMaxMs: number;
@@ -21,7 +24,7 @@ export type DirectedCapturePhaseBudget = {
 // fixture audit and fictional-data preparation can safely take longer than the
 // market-facing interaction without forcing the recording itself to be long.
 export const DEFAULT_DIRECTED_CAPTURE_PHASE_BUDGET: DirectedCapturePhaseBudget = {
-  protectedSetupMaxMs: 150_000,
+  protectedBootstrapMaxMs: 70_000,
   preflightMaxMs: 125_000,
   cleanTakeActionMaxMs: 22_000,
   cleanTakeMaxMs: 30_000,
@@ -82,29 +85,37 @@ export function assertProfessionalRecordingDuration(durationSeconds: number): vo
 }
 
 export async function executeWithinBudget<Execution>(
-  execute: () => Promise<Execution>,
+  execute: (signal: AbortSignal) => Promise<Execution>,
   budgetMs: number,
   timeout?: { code: string; message: string },
 ): Promise<Execution> {
   let timer: ReturnType<typeof setTimeout> | undefined;
+  const controller = new AbortController();
+  let timedOut = false;
+  const timeoutError = () =>
+    new RecordingPassError(
+      timeout?.code ?? "RECORDING_WALL_CLOCK_TIMEOUT",
+      timeout?.message ?? "The walkthrough exceeded its safe recording time budget.",
+    );
+  const execution = Promise.resolve().then(() => execute(controller.signal));
+  // A timed-out browser call can settle later; observe its rejection while the
+  // abort signal prevents subsequent guarded actions.
+  void execution.catch(() => undefined);
   try {
     return await Promise.race([
-      execute(),
+      execution,
       new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(
-          () =>
-            reject(
-              new RecordingPassError(
-                timeout?.code ?? "RECORDING_WALL_CLOCK_TIMEOUT",
-                timeout?.message ?? "The walkthrough exceeded its safe recording time budget.",
-              ),
-            ),
-          budgetMs,
-        );
+        timer = setTimeout(() => {
+          timedOut = true;
+          const error = timeoutError();
+          controller.abort(error);
+          reject(error);
+        }, budgetMs);
       }),
     ]);
   } finally {
     if (timer) clearTimeout(timer);
+    if (!timedOut) controller.abort();
   }
 }
 

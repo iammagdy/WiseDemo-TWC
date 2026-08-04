@@ -7,9 +7,22 @@ function Clapper({ className = "" }: { className?: string }) {
   return (
     <svg viewBox="0 0 32 32" className={className} aria-hidden="true">
       <rect x="2" y="12" width="28" height="16" rx="2" fill="currentColor" opacity="0.15" />
-      <rect x="2" y="12" width="28" height="16" rx="2" stroke="currentColor" strokeWidth="1.5" fill="none" />
+      <rect
+        x="2"
+        y="12"
+        width="28"
+        height="16"
+        rx="2"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        fill="none"
+      />
       <path d="M2 8 L30 4 L30 12 L2 12 Z" fill="currentColor" />
-      <path d="M6 5 L10 11 M12 4 L16 11 M18 4 L22 11 M24 3 L28 10" stroke="var(--color-background)" strokeWidth="1.2" />
+      <path
+        d="M6 5 L10 11 M12 4 L16 11 M18 4 L22 11 M24 3 L28 10"
+        stroke="var(--color-background)"
+        strokeWidth="1.2"
+      />
     </svg>
   );
 }
@@ -23,18 +36,29 @@ export function Landing() {
         <div className="mx-auto flex max-w-7xl items-center justify-between gap-3 px-4 py-3 sm:px-6 sm:py-4">
           <Link to="/" className="flex min-w-0 items-center gap-2">
             <Clapper className="h-6 w-6 shrink-0 text-primary" />
-            <span className="font-mono-tight text-base font-semibold tracking-tight sm:text-lg">WiseDemo</span>
+            <span className="font-mono-tight text-base font-semibold tracking-tight sm:text-lg">
+              WiseDemo
+            </span>
             <span className="ml-1 hidden rounded-sm border border-border px-1.5 py-0.5 font-mono-tight text-[10px] uppercase text-muted-foreground sm:inline">
               REC
             </span>
           </Link>
           <nav className="hidden gap-8 text-sm text-muted-foreground md:flex">
-            <a href="#how" className="hover:text-foreground">How it works</a>
-            <a href="#showcase" className="hover:text-foreground">Showcase</a>
-            <a href="#pricing" className="hover:text-foreground">Pricing</a>
+            <a href="#how" className="hover:text-foreground">
+              How it works
+            </a>
+            <a href="#showcase" className="hover:text-foreground">
+              Showcase
+            </a>
+            <a href="#pricing" className="hover:text-foreground">
+              Pricing
+            </a>
           </nav>
           <div className="flex shrink-0 items-center gap-2 sm:gap-3">
-            <Link to="/dashboard" className="hidden text-sm text-muted-foreground hover:text-foreground sm:inline">
+            <Link
+              to="/dashboard"
+              className="hidden text-sm text-muted-foreground hover:text-foreground sm:inline"
+            >
               Studio
             </Link>
             <Link
@@ -61,14 +85,18 @@ export function Landing() {
             <h1 className="text-balance font-sans text-4xl font-semibold leading-[1.05] tracking-tight sm:text-5xl md:text-7xl">
               Your SaaS,
               <br />
-              <span className="italic" style={{ fontFamily: "'Instrument Serif', serif", fontWeight: 400 }}>
+              <span
+                className="italic"
+                style={{ fontFamily: "'Instrument Serif', serif", fontWeight: 400 }}
+              >
                 filmed by an agent
               </span>{" "}
               in 60&nbsp;seconds.
             </h1>
             <p className="mt-6 max-w-xl text-base leading-relaxed text-muted-foreground sm:text-lg">
-              Drop your URL. WiseDemo maps your product, scripts the flow with AI, drives a real browser,
-              and hands you a cinematic ≤60-second demo — ready for X, LinkedIn, and Product Hunt.
+              Drop your URL. WiseDemo maps your product, scripts the flow with AI, drives a real
+              browser, and hands you a cinematic ≤60-second demo — ready for X, LinkedIn, and
+              Product Hunt.
             </p>
 
             <form
@@ -120,7 +148,9 @@ export function Landing() {
                     scene_03.take_01
                   </span>
                 </div>
-                <span className="font-mono-tight text-[11px] text-muted-foreground">00:42 / 01:00</span>
+                <span className="font-mono-tight text-[11px] text-muted-foreground">
+                  00:42 / 01:00
+                </span>
               </div>
               <img
                 src={heroImage}
@@ -132,11 +162,11 @@ export function Landing() {
               {/* Timeline strip */}
               <div className="grid grid-cols-6 gap-1 border-t border-border bg-background/60 p-2">
                 {[0.4, 0.7, 0.55, 0.9, 0.6, 0.35].map((h, i) => (
-                  <div key={i} className="flex h-8 items-end overflow-hidden rounded-sm bg-secondary">
-                    <div
-                      className="w-full bg-primary/70"
-                      style={{ height: `${h * 100}%` }}
-                    />
+                  <div
+                    key={i}
+                    className="flex h-8 items-end overflow-hidden rounded-sm bg-secondary"
+                  >
+                    <div className="w-full bg-primary/70" style={{ height: `${h * 100}%` }} />
                   </div>
                 ))}
               </div>
@@ -162,14 +192,20 @@ export function Landing() {
         <div className="overflow-hidden">
           <div className="animate-marquee flex w-max gap-14 whitespace-nowrap font-mono-tight text-xs uppercase tracking-widest text-muted-foreground">
             {[...Array(2)].flatMap((_, k) =>
-              ["Solo builders", "YC W25", "Indie hackers", "Product Hunt launches", "SaaS founders", "Devtools", "AI startups"].map(
-                (t) => (
-                  <span key={`${k}-${t}`} className="flex items-center gap-3">
-                    <span className="h-1 w-1 rounded-full bg-primary" />
-                    {t}
-                  </span>
-                ),
-              ),
+              [
+                "Solo builders",
+                "YC W25",
+                "Indie hackers",
+                "Product Hunt launches",
+                "SaaS founders",
+                "Devtools",
+                "AI startups",
+              ].map((t) => (
+                <span key={`${k}-${t}`} className="flex items-center gap-3">
+                  <span className="h-1 w-1 rounded-full bg-primary" />
+                  {t}
+                </span>
+              )),
             )}
           </div>
         </div>
@@ -323,7 +359,9 @@ function Stat({ k, v }: { k: string; v: string }) {
   return (
     <div>
       <div className="font-sans text-2xl font-semibold tracking-tight text-foreground">{k}</div>
-      <div className="mt-1 font-mono-tight text-[11px] uppercase tracking-wider text-muted-foreground">{v}</div>
+      <div className="mt-1 font-mono-tight text-[11px] uppercase tracking-wider text-muted-foreground">
+        {v}
+      </div>
     </div>
   );
 }
@@ -364,7 +402,13 @@ const PLANS = [
     name: "Director",
     price: 49,
     tag: "For shipping founders.",
-    perks: ["30 demos / month", "Encrypted logins", "1080p, no watermark", "9:16 + 16:9 exports", "Custom captions"],
+    perks: [
+      "30 demos / month",
+      "Encrypted logins",
+      "1080p, no watermark",
+      "9:16 + 16:9 exports",
+      "Custom captions",
+    ],
     cta: "Book the studio",
     featured: true,
   },
@@ -372,7 +416,13 @@ const PLANS = [
     name: "Studio",
     price: 199,
     tag: "For growth teams.",
-    perks: ["Unlimited demos", "4K masters", "Voice-over track", "Brand kit", "Priority render queue"],
+    perks: [
+      "Unlimited demos",
+      "4K masters",
+      "Voice-over track",
+      "Brand kit",
+      "Priority render queue",
+    ],
     cta: "Contact production",
     featured: false,
   },

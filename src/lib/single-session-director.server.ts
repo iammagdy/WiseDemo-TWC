@@ -89,6 +89,7 @@ export async function runSingleSessionDirectedCapture<
     websocketUrl: string,
     maxWallMs: number,
     liveAccountSafetyAudit: LiveAudit | undefined,
+    signal: AbortSignal,
   ) => Promise<Preflight>;
   executeFinalTake: (
     websocketUrl: string,
@@ -129,7 +130,7 @@ export async function runSingleSessionDirectedCapture<
       throw new Error("The Steel session did not provide a browser connection.");
     const websocketUrl = session.websocketUrl;
     await options.publishLiveSession(session);
-    const protectedSetup = await executeWithinBudget(
+    const liveAccountSafetyAudit = await executeWithinBudget(
       async () => {
         if (options.installPrivacyShield)
           privacyShield = await options.installPrivacyShield(websocketUrl);
@@ -148,25 +149,25 @@ export async function runSingleSessionDirectedCapture<
           ? await options.liveAccountSafetyAudit(websocketUrl)
           : undefined;
         options.assertMutationAllowed?.(liveAccountSafetyAudit);
-        if (options.assertPrivacyShield)
-          await options.assertPrivacyShield(websocketUrl, "before-fixture-discovery");
-        const preflight = await executeWithinBudget(
-          () => options.preflight(websocketUrl, phaseBudget.preflightMaxMs, liveAccountSafetyAudit),
-          phaseBudget.preflightMaxMs,
-          {
-            code: "PROTECTED_PREFLIGHT_TIMEOUT",
-            message: "Protected fixture preparation exceeded its safe setup budget.",
-          },
-        );
-        return { liveAccountSafetyAudit, preflight };
+        return liveAccountSafetyAudit;
       },
-      phaseBudget.protectedSetupMaxMs,
+      phaseBudget.protectedBootstrapMaxMs,
       {
-        code: "PROTECTED_SETUP_TIMEOUT",
-        message: "Protected setup exceeded its safe session budget before the clean take.",
+        code: "PROTECTED_BOOTSTRAP_TIMEOUT",
+        message: "Protected bootstrap exceeded its safe session budget before fixture preparation.",
       },
     );
-    const { liveAccountSafetyAudit, preflight } = protectedSetup;
+    if (options.assertPrivacyShield)
+      await options.assertPrivacyShield(websocketUrl, "before-fixture-discovery");
+    const preflight = await executeWithinBudget(
+      (signal) =>
+        options.preflight(websocketUrl, phaseBudget.preflightMaxMs, liveAccountSafetyAudit, signal),
+      phaseBudget.preflightMaxMs,
+      {
+        code: "PROTECTED_PREFLIGHT_TIMEOUT",
+        message: "Protected fixture preparation exceeded its safe setup budget.",
+      },
+    );
     if (options.removePrivacyShield)
       await options.removePrivacyShield(websocketUrl, preflight, privacyShield);
     const takeStartedAtMs = now();

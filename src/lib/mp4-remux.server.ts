@@ -21,10 +21,7 @@ function groupConsecutive(values: number[]): { counts: number[]; values: number[
   return { counts, values: groupedValues };
 }
 
-function removeChildBox(
-  parent: { boxes?: Array<{ type?: string }> },
-  type: string,
-): void {
+function removeChildBox(parent: { boxes?: Array<{ type?: string }> }, type: string): void {
   parent.boxes = (parent.boxes ?? []).filter((box) => box.type !== type);
   delete (parent as Record<string, unknown>)[type];
 }
@@ -41,7 +38,7 @@ type RawBox = { offset: number; size: number; headerSize: number; type: string }
 function readBoxes(bytes: Uint8Array, start = 0, end = bytes.byteLength): RawBox[] {
   const boxes: RawBox[] = [];
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  for (let offset = start; offset + 8 <= end; ) {
+  for (let offset = start; offset + 8 <= end;) {
     let size = view.getUint32(offset);
     const type = String.fromCharCode(...bytes.subarray(offset + 4, offset + 8));
     let headerSize = 8;
@@ -120,9 +117,7 @@ export function remuxFragmentedMp4(bytes: Uint8Array): Uint8Array {
       throw new Mp4RemuxError(`MP4 track ${trackInfo.id} contains no media samples.`);
     }
     const samples = sampleInfo.map((_, index) => file.getTrackSample(trackInfo.id, index));
-    const sampleBytes = new Uint8Array(
-      samples.reduce((total, sample) => total + sample.size, 0),
-    );
+    const sampleBytes = new Uint8Array(samples.reduce((total, sample) => total + sample.size, 0));
     let byteOffset = 0;
     for (const sample of samples) {
       const data = requireSampleData(sample);
@@ -163,9 +158,7 @@ export function remuxFragmentedMp4(bytes: Uint8Array): Uint8Array {
 
     const mediaDuration = samples.reduce((total, sample) => total + sample.duration, 0);
     track.mdia.mdhd.duration = mediaDuration;
-    track.tkhd.duration = Math.ceil(
-      (mediaDuration * movieTimescale) / track.mdia.mdhd.timescale,
-    );
+    track.tkhd.duration = Math.ceil((mediaDuration * movieTimescale) / track.mdia.mdhd.timescale);
     movieDuration = Math.max(movieDuration, track.tkhd.duration);
     return { track, sampleBytes };
   });
@@ -173,9 +166,11 @@ export function remuxFragmentedMp4(bytes: Uint8Array): Uint8Array {
   file.moov.mvhd.duration = movieDuration;
   removeChildBox(file.moov, "mvex");
   file.ftyp.compatible_brands = [
-    ...new Set(
-      [...file.ftyp.compatible_brands.filter((brand) => brand !== "hlsf"), "isom", "mp42"],
-    ),
+    ...new Set([
+      ...file.ftyp.compatible_brands.filter((brand) => brand !== "hlsf"),
+      "isom",
+      "mp42",
+    ]),
   ];
 
   const mediaData = new Uint8Array(

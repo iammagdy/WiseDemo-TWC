@@ -41,7 +41,7 @@ function fragmentedFixture(): { init: Uint8Array; segments: Uint8Array[] } {
   const bytes = new Uint8Array(file.getBuffer().buffer);
   const view = new DataView(bytes.buffer);
   const top: Array<{ offset: number; size: number; type: string }> = [];
-  for (let offset = 0; offset + 8 <= bytes.byteLength; ) {
+  for (let offset = 0; offset + 8 <= bytes.byteLength;) {
     const size = view.getUint32(offset);
     const type = String.fromCharCode(...bytes.subarray(offset + 4, offset + 8));
     top.push({ offset, size, type });
@@ -134,11 +134,7 @@ test("retries recording-not-ready responses and downloads every authenticated pa
   assert.ok(result);
   assert.equal(playlistCalls, 3);
   assert.equal(result.durationSeconds, 4);
-  assert.deepEqual(listIsoBmffBoxes(result.bytes), [
-    "ftyp",
-    "moov",
-    "mdat",
-  ]);
+  assert.deepEqual(listIsoBmffBoxes(result.bytes), ["ftyp", "moov", "mdat"]);
   const remuxed = result.bytes.slice().buffer as MP4BoxBuffer;
   remuxed.fileStart = 0;
   const parsed = createFile(true);

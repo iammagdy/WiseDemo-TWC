@@ -906,6 +906,7 @@ export const captureDirectedDemo = createServerFn({ method: "POST" })
           websocketUrl,
           _maxWallMs,
           liveAccountSafetyAudit,
+          signal,
         ): Promise<DirectedPreflight> => {
           if (brief.selectedFeature.name !== "Smart Tailoring") {
             throw new Error(
@@ -915,6 +916,7 @@ export const captureDirectedDemo = createServerFn({ method: "POST" })
           const adapterPlan = await withProductLocaleAdapterContext({
             websocketUrl,
             recordingLocale: demo.recording_locale,
+            signal,
             onLocaleDiagnostic: recordLocaleDiagnostic,
             execute: (adapterContext) =>
               prepareWiseResumeFixtureSmartTailoring(adapterContext, {
@@ -1259,7 +1261,7 @@ export const captureDirectedDemo = createServerFn({ method: "POST" })
         error instanceof Error ? error.message : "Directed one-session capture failed.";
       const message =
         latestFixturePreparationStage &&
-        /PROTECTED_(?:SETUP|PREFLIGHT)_TIMEOUT|Protected setup/i.test(baseMessage)
+        /PROTECTED_(?:BOOTSTRAP|PREFLIGHT)_TIMEOUT|Protected (?:bootstrap|setup)/i.test(baseMessage)
           ? `${baseMessage} (fixture-stage=${latestFixturePreparationStage})`
           : baseMessage;
       const failed = await context.repository.updateDemo(demo.id, {

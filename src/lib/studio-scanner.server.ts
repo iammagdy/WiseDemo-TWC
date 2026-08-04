@@ -43,21 +43,38 @@ export async function scanWebsite(url: string, projectName: string): Promise<Web
       `${projectName} product experience.`;
     const homeLinks = collectLinks(html, normalizedUrl);
     const sitemapLinks = await discoverSitemapLinks(normalizedUrl);
-    const candidateLinks = prioritizeLinks([...homeLinks, ...sitemapLinks], normalizedUrl).slice(0, 8);
+    const candidateLinks = prioritizeLinks([...homeLinks, ...sitemapLinks], normalizedUrl).slice(
+      0,
+      8,
+    );
     const scannedPages = await Promise.all(
       candidateLinks.map(async (link) => {
         try {
-          return { link, html: link.url === normalizedUrl ? html : await fetchHtml(link.url, 5500) };
+          return {
+            link,
+            html: link.url === normalizedUrl ? html : await fetchHtml(link.url, 5500),
+          };
         } catch {
           return { link, html: "" };
         }
       }),
     );
 
-    const headings = unique(scannedPages.flatMap((page) => (page.html ? collectHeadings(page.html) : [page.link.label]))).slice(0, 18);
-    const actions = unique(scannedPages.flatMap((page) => (page.html ? collectActions(page.html) : []))).slice(0, 16);
-    const features = unique(scannedPages.flatMap((page) => collectFeatureSignals(page.html, page.link.label))).slice(0, 14);
-    const links = mergeScanLinks([{ label: "Start page", url: normalizedUrl }, ...homeLinks, ...sitemapLinks, ...candidateLinks]).slice(0, 24);
+    const headings = unique(
+      scannedPages.flatMap((page) => (page.html ? collectHeadings(page.html) : [page.link.label])),
+    ).slice(0, 18);
+    const actions = unique(
+      scannedPages.flatMap((page) => (page.html ? collectActions(page.html) : [])),
+    ).slice(0, 16);
+    const features = unique(
+      scannedPages.flatMap((page) => collectFeatureSignals(page.html, page.link.label)),
+    ).slice(0, 14);
+    const links = mergeScanLinks([
+      { label: "Start page", url: normalizedUrl },
+      ...homeLinks,
+      ...sitemapLinks,
+      ...candidateLinks,
+    ]).slice(0, 24);
     const authUrl = await detectAuthUrl(html, links, normalizedUrl);
 
     return {
@@ -65,14 +82,27 @@ export async function scanWebsite(url: string, projectName: string): Promise<Web
       description: cleanText(description).slice(0, 700),
       links,
       authUrl,
-      siteMapMd: buildSiteMap({ projectName, normalizedUrl, title, description, headings, actions, features, links, authUrl }),
+      siteMapMd: buildSiteMap({
+        projectName,
+        normalizedUrl,
+        title,
+        description,
+        headings,
+        actions,
+        features,
+        links,
+        authUrl,
+      }),
     };
   } catch {
     return buildFallbackScan(normalizedUrl, projectName);
   }
 }
 
-async function scanWithFirecrawl(baseUrl: string, projectName: string): Promise<WebsiteScan | null> {
+async function scanWithFirecrawl(
+  baseUrl: string,
+  projectName: string,
+): Promise<WebsiteScan | null> {
   const connectionKey = serverEnv("FIRECRAWL_API_KEY");
   if (!connectionKey) return null;
 
@@ -88,7 +118,11 @@ async function scanWithFirecrawl(baseUrl: string, projectName: string): Promise<
         markdown?: string;
         summary?: string;
         metadata?: { title?: string; description?: string; sourceURL?: string };
-        data?: { markdown?: string; summary?: string; metadata?: { title?: string; description?: string; sourceURL?: string } };
+        data?: {
+          markdown?: string;
+          summary?: string;
+          metadata?: { title?: string; description?: string; sourceURL?: string };
+        };
       }>("/scrape", {
         url: baseUrl,
         formats: ["markdown", "summary", "links"],
@@ -101,31 +135,56 @@ async function scanWithFirecrawl(baseUrl: string, projectName: string): Promise<
     const markdown = scrapeResult.markdown ?? scrapeResult.data?.markdown ?? "";
     const summary = scrapeResult.summary ?? scrapeResult.data?.summary ?? "";
     const title = metadata?.title || firstMarkdownHeading(markdown) || projectName;
-    const description = metadata?.description || summary || sentenceFromText(markdown) || `${projectName} product experience.`;
+    const description =
+      metadata?.description ||
+      summary ||
+      sentenceFromText(markdown) ||
+      `${projectName} product experience.`;
     const mappedLinks = (mapResult.links ?? mapResult.data?.links ?? [])
       .map((link) => toSameOriginLink(link, baseUrl))
       .filter((link): link is ScanLink => Boolean(link));
     const inlineLinks = extractMarkdownLinks(markdown, baseUrl);
-    const links = prioritizeLinks([{ label: "Start page", url: baseUrl }, ...mappedLinks, ...inlineLinks], baseUrl).slice(0, 24);
+    const links = prioritizeLinks(
+      [{ label: "Start page", url: baseUrl }, ...mappedLinks, ...inlineLinks],
+      baseUrl,
+    ).slice(0, 24);
     const headings = extractMarkdownHeadings(markdown);
     const actions = extractMarkdownActions(markdown);
     const features = extractMarkdownFeatures(markdown, description);
-    const authUrl = links.find((link) => isAuthCandidate(`${link.label} ${link.url}`))?.url ?? (await detectAuthUrl("", links, baseUrl));
+    const authUrl =
+      links.find((link) => isAuthCandidate(`${link.label} ${link.url}`))?.url ??
+      (await detectAuthUrl("", links, baseUrl));
 
     return {
       title: cleanText(title).slice(0, 120),
       description: cleanText(description).slice(0, 700),
       links: mergeScanLinks([{ label: "Start page", url: baseUrl }, ...links]).slice(0, 24),
       authUrl,
-      siteMapMd: buildSiteMap({ projectName, normalizedUrl: baseUrl, title, description, headings, actions, features, links, authUrl }),
+      siteMapMd: buildSiteMap({
+        projectName,
+        normalizedUrl: baseUrl,
+        title,
+        description,
+        headings,
+        actions,
+        features,
+        links,
+        authUrl,
+      }),
     };
   } catch (error) {
-    console.warn("Firecrawl scan failed; using direct scanner fallback", error instanceof Error ? error.message : error);
+    console.warn(
+      "Firecrawl scan failed; using direct scanner fallback",
+      error instanceof Error ? error.message : error,
+    );
     return null;
   }
 }
 
-async function callFirecrawl<T>(path: "/map" | "/scrape", body: Record<string, unknown>): Promise<T> {
+async function callFirecrawl<T>(
+  path: "/map" | "/scrape",
+  body: Record<string, unknown>,
+): Promise<T> {
   const connectionKey = serverEnv("FIRECRAWL_API_KEY");
   const lovableKey = serverEnv("LOVABLE_API_KEY");
   if (!connectionKey) throw new Error("Firecrawl is not connected.");
@@ -147,7 +206,8 @@ async function callFirecrawl<T>(path: "/map" | "/scrape", body: Record<string, u
   });
 
   const text = await response.text();
-  if (!response.ok) throw new Error(`Firecrawl request failed [${response.status}]: ${text.slice(0, 400)}`);
+  if (!response.ok)
+    throw new Error(`Firecrawl request failed [${response.status}]: ${text.slice(0, 400)}`);
   return JSON.parse(text) as T;
 }
 
@@ -190,7 +250,11 @@ function extractMarkdownActions(markdown: string) {
       .split(/\n+/)
       .map((line) => cleanText(line.replace(/^[-*#\s]+/, "")))
       .filter((text) => text.length > 2 && text.length < 90)
-      .filter((text) => /start|try|demo|sign|login|create|book|join|launch|get|export|dashboard|pricing|learn|contact|download|share|publish/i.test(text)),
+      .filter((text) =>
+        /start|try|demo|sign|login|create|book|join|launch|get|export|dashboard|pricing|learn|contact|download|share|publish/i.test(
+          text,
+        ),
+      ),
   ).slice(0, 16);
 }
 
@@ -199,7 +263,11 @@ function extractMarkdownFeatures(markdown: string, description: string) {
     [description, ...markdown.split(/\n+/)]
       .map((line) => cleanText(line.replace(/^[-*#\s]+/, "")))
       .filter((text) => text.length >= 8 && text.length <= 130)
-      .filter((text) => /ai|agent|demo|video|record|export|dashboard|workflow|automate|analytics|campaign|builder|editor|template|collaborat|integrat|report|publish|share|create|generate|feature|product|customer|team|brand|content/i.test(text)),
+      .filter((text) =>
+        /ai|agent|demo|video|record|export|dashboard|workflow|automate|analytics|campaign|builder|editor|template|collaborat|integrat|report|publish|share|create|generate|feature|product|customer|team|brand|content/i.test(
+          text,
+        ),
+      ),
   ).slice(0, 14);
 }
 
@@ -234,13 +302,28 @@ function buildSiteMap(input: {
   links: ScanLink[];
   authUrl: string | null;
 }) {
-  const pageLines = (input.links.length > 0 ? input.links : [{ label: "Start page", url: input.normalizedUrl }])
+  const pageLines = (
+    input.links.length > 0 ? input.links : [{ label: "Start page", url: input.normalizedUrl }]
+  )
     .slice(0, 12)
     .map((link) => `- ${link.label}: ${link.url}`)
     .join("\n");
-  const headingLines = input.headings.slice(0, 10).map((heading) => `- ${heading}`).join("\n") || "- Main product screen";
-  const featureLines = input.features.slice(0, 12).map((feature) => `- ${feature}`).join("\n") || "- Main product experience";
-  const actionLines = input.actions.slice(0, 10).map((action) => `- ${action}`).join("\n") || "- Open the product\n- Show the primary call to action\n- End on the most visual proof screen";
+  const headingLines =
+    input.headings
+      .slice(0, 10)
+      .map((heading) => `- ${heading}`)
+      .join("\n") || "- Main product screen";
+  const featureLines =
+    input.features
+      .slice(0, 12)
+      .map((feature) => `- ${feature}`)
+      .join("\n") || "- Main product experience";
+  const actionLines =
+    input.actions
+      .slice(0, 10)
+      .map((action) => `- ${action}`)
+      .join("\n") ||
+    "- Open the product\n- Show the primary call to action\n- End on the most visual proof screen";
 
   return `# ${input.projectName} product map
 
@@ -291,7 +374,8 @@ async function fetchHtml(url: string, timeoutMs: number) {
 
     if (!response.ok) throw new Error(`The site returned ${response.status}.`);
     const contentType = response.headers.get("content-type") ?? "";
-    if (contentType && !/html|xml|text/i.test(contentType)) throw new Error("The URL did not return readable page content.");
+    if (contentType && !/html|xml|text/i.test(contentType))
+      throw new Error("The URL did not return readable page content.");
     return (await response.text()).slice(0, 700_000);
   } finally {
     clearTimeout(timeout);
@@ -300,7 +384,10 @@ async function fetchHtml(url: string, timeoutMs: number) {
 
 async function discoverSitemapLinks(base: string): Promise<ScanLink[]> {
   const baseUrl = new URL(base);
-  const sitemapUrls = [new URL("/sitemap.xml", baseUrl).toString(), new URL("/sitemap_index.xml", baseUrl).toString()];
+  const sitemapUrls = [
+    new URL("/sitemap.xml", baseUrl).toString(),
+    new URL("/sitemap_index.xml", baseUrl).toString(),
+  ];
   const links: ScanLink[] = [];
 
   for (const sitemapUrl of sitemapUrls) {
@@ -329,7 +416,10 @@ function prioritizeLinks(links: ScanLink[], base: string): ScanLink[] {
     .filter((link) => {
       try {
         const url = new URL(link.url);
-        return url.origin === baseUrl.origin && !/\.(png|jpe?g|gif|webp|svg|pdf|zip|mp4|webm)$/i.test(url.pathname);
+        return (
+          url.origin === baseUrl.origin &&
+          !/\.(png|jpe?g|gif|webp|svg|pdf|zip|mp4|webm)$/i.test(url.pathname)
+        );
       } catch {
         return false;
       }
@@ -340,7 +430,12 @@ function prioritizeLinks(links: ScanLink[], base: string): ScanLink[] {
 function linkScore(link: ScanLink) {
   const value = `${link.label} ${link.url}`.toLowerCase();
   let score = 0;
-  if (/feature|product|solution|use-case|workflow|dashboard|app|demo|pricing|customer|case|integrations/.test(value)) score += 30;
+  if (
+    /feature|product|solution|use-case|workflow|dashboard|app|demo|pricing|customer|case|integrations/.test(
+      value,
+    )
+  )
+    score += 30;
   if (/auth|login|signin|sign-in|account/.test(value)) score += 18;
   if (/blog|privacy|terms|legal|cookie|status|docs\/api|changelog/.test(value)) score -= 30;
   score -= Math.min(12, new URL(link.url).pathname.split("/").filter(Boolean).length * 2);
@@ -355,7 +450,10 @@ function mergeScanLinks(links: ScanLink[]) {
     const normalized = link.url.replace(/\/$/, "");
     if (seen.has(normalized)) continue;
     seen.add(normalized);
-    merged.push({ label: cleanText(link.label || labelFromPath(new URL(normalized).pathname)).slice(0, 80), url: normalized });
+    merged.push({
+      label: cleanText(link.label || labelFromPath(new URL(normalized).pathname)).slice(0, 80),
+      url: normalized,
+    });
   }
 
   return merged;
@@ -371,7 +469,7 @@ function stripHtml(html: string) {
 }
 
 function getTagText(html: string, tag: string) {
-  const match = html.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\/${tag}>`, "i"));
+  const match = html.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)</${tag}>`, "i"));
   return match ? decodeEntities(match[1]) : "";
 }
 
@@ -406,7 +504,11 @@ function collectActions(html: string) {
   const actions = Array.from(html.matchAll(/<(?:a|button)[^>]*>([\s\S]*?)<\/(?:a|button)>/gi))
     .map((match) => cleanText(decodeEntities(match[1].replace(/<[^>]+>/g, " "))))
     .filter((text) => text.length > 1 && text.length < 70)
-    .filter((text) => /start|try|demo|sign|login|create|book|join|launch|get|export|dashboard|pricing|learn|contact/i.test(text));
+    .filter((text) =>
+      /start|try|demo|sign|login|create|book|join|launch|get|export|dashboard|pricing|learn|contact/i.test(
+        text,
+      ),
+    );
   return unique(actions).slice(0, 12);
 }
 
@@ -414,16 +516,24 @@ function collectFeatureSignals(html: string, fallbackLabel: string) {
   if (!html) return [fallbackLabel];
 
   const textCandidates = [
-    ...Array.from(html.matchAll(/<(?:h[1-4]|strong|b|span|p|li)[^>]*>([\s\S]*?)<\/(?:h[1-4]|strong|b|span|p|li)>/gi)).map((match) =>
-      cleanText(decodeEntities(match[1].replace(/<[^>]+>/g, " "))),
+    ...Array.from(
+      html.matchAll(
+        /<(?:h[1-4]|strong|b|span|p|li)[^>]*>([\s\S]*?)<\/(?:h[1-4]|strong|b|span|p|li)>/gi,
+      ),
+    ).map((match) => cleanText(decodeEntities(match[1].replace(/<[^>]+>/g, " ")))),
+    ...Array.from(html.matchAll(/(?:aria-label|title|alt)=["']([^"']{8,120})["']/gi)).map((match) =>
+      cleanText(decodeEntities(match[1])),
     ),
-    ...Array.from(html.matchAll(/(?:aria-label|title|alt)=["']([^"']{8,120})["']/gi)).map((match) => cleanText(decodeEntities(match[1]))),
   ];
 
   return unique(
     textCandidates
       .filter((text) => text.length >= 8 && text.length <= 120)
-      .filter((text) => /ai|agent|demo|video|record|export|dashboard|workflow|automate|analytics|campaign|builder|editor|template|collaborat|integrat|report|publish|share|create|generate|feature|product/i.test(text)),
+      .filter((text) =>
+        /ai|agent|demo|video|record|export|dashboard|workflow|automate|analytics|campaign|builder|editor|template|collaborat|integrat|report|publish|share|create|generate|feature|product/i.test(
+          text,
+        ),
+      ),
   ).slice(0, 8);
 }
 
@@ -439,9 +549,11 @@ function collectLinks(html: string, base: string): ScanLink[] {
       const url = new URL(href, baseUrl);
       if (url.origin !== baseUrl.origin) continue;
       url.hash = "";
-      const label = cleanText(decodeEntities(match[2].replace(/<[^>]+>/g, " "))) || labelFromPath(url.pathname);
+      const label =
+        cleanText(decodeEntities(match[2].replace(/<[^>]+>/g, " "))) || labelFromPath(url.pathname);
       const normalized = url.toString().replace(/\/$/, "");
-      if (!links.some((link) => link.url === normalized)) links.push({ label: label.slice(0, 80), url: normalized });
+      if (!links.some((link) => link.url === normalized))
+        links.push({ label: label.slice(0, 80), url: normalized });
       if (links.length >= 14) break;
     } catch {
       // Ignore malformed links from the target page.
@@ -468,7 +580,15 @@ async function detectAuthUrl(html: string, links: ScanLink[], base: string) {
   }
 
   const baseUrl = new URL(base);
-  const commonPaths = ["/auth", "/login", "/signin", "/sign-in", "/log-in", "/users/sign_in", "/account/login"];
+  const commonPaths = [
+    "/auth",
+    "/login",
+    "/signin",
+    "/sign-in",
+    "/log-in",
+    "/users/sign_in",
+    "/account/login",
+  ];
   const scored: { url: string; score: number }[] = [];
 
   for (const path of commonPaths) {
@@ -495,7 +615,9 @@ function isAuthCandidate(value: string) {
 }
 
 function sentenceFromText(text: string) {
-  const sentence = text.split(/(?<=[.!?])\s+/).find((item) => item.length > 50 && item.length < 240);
+  const sentence = text
+    .split(/(?<=[.!?])\s+/)
+    .find((item) => item.length > 50 && item.length < 240);
   return sentence ?? text.slice(0, 180);
 }
 
