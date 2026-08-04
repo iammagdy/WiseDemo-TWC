@@ -1568,12 +1568,13 @@ async function deleteOneWiseResumeCapacityRecord(
       const documents = await list(account.$id);
       if (!documents) return { ok: false, reason: "inventory" };
       const ids = new Set(documents.map((document) => typeof document?.$id === "string" ? document.$id : "").filter(Boolean));
+      const primaryIds = documents.filter((document) => document?.is_primary === true).map((document) => document.$id).filter((id) => typeof id === "string" && ids.has(id));
       const hasDependent = (id) => documents.some((document) => document?.parent_resume_id === id);
       const eligible = documents.map((document) => {
         const id = typeof document?.$id === "string" && ids.has(document.$id) ? document.$id : null;
         const title = typeof document?.title === "string" ? document.title : "";
         const parent = typeof document?.parent_resume_id === "string" && ids.has(document.parent_resume_id) ? document.parent_resume_id : null;
-        const nonPrimary = document?.is_primary === false;
+        const nonPrimary = document?.is_primary === false || (primaryIds.length === 1 && document?.$id !== primaryIds[0]);
         const nonMaster = document?.is_master === false || Boolean(parent);
         const independent = Boolean(id) && !hasDependent(id);
         const incomplete = !title.trim() || (![document?.summary, document?.experience, document?.education, document?.skills].some((value) => typeof value === "string" && value.trim().length > 24));
@@ -1607,8 +1608,20 @@ async function deleteOneWiseResumeCapacityRecord(
       return { ok: true, selectionCategory: category, nonPrimaryConfirmed: selected.nonPrimary === true, nonMasterConfirmed: selected.nonMaster === true, exactTargetCount: 1, deletionSuccess: true, inventoryCountBefore: documents.length, inventoryCountAfter: after.length };
     })()`),
   );
+  if (result?.ok !== true) {
+    const safeReason = [
+      "account",
+      "inventory",
+      "ambiguous",
+      "no-eligible-record",
+      "delete",
+      "post-delete-inventory",
+    ].includes(asString(result?.reason) ?? "")
+      ? asString(result?.reason)
+      : "invalid-result";
+    throw new Error(`WiseResume capacity deletion stopped safely: ${safeReason}.`);
+  }
   if (
-    result?.ok !== true ||
     !["experimental", "duplicate-copy", "incomplete", "trial", "oldest-non-primary"].includes(
       asString(result?.selectionCategory) ?? "",
     ) ||
