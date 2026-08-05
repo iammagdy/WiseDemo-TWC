@@ -1,0 +1,1 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="0" skipped="0" tests="1" time="82.754" timestamp="2026-08-05T12:52:18.940069+00:00" hostname="agent-env-12a195ec-6538-4363-ba33-61bbbe73c43c"><testcase classname="tests.test_wisedemo_backend" name="test_full_pipeline_e2e" time="82.708" /></testsuite></testsuites>

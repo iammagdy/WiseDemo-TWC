@@ -1,0 +1,39 @@
+{
+  "summary": "Backend-only comprehensive test of WiseDemo v2 (fresh build). All 10 pytest tests pass (100%): health, URL validation (empty/whitespace/non-URL/short → 400/422), valid job creation, single job GET, unknown job 404, list jobs, video-before-ready 404, and full live pipeline e2e (scrape → Gemini analyze → Gemini plan → Steel record → HLS→MP4 → OpenAI TTS → ffmpeg compose). End-to-end job (https://vercel.com) reached status='ready', progress=100, product.product_name/tagline/top_features populated, video MP4 served with Content-Type video/mp4, body > 200KB, and ?download=1 returns Content-Disposition: attachment header. Duration was within [30,70]s. E2E took ~82s and full suite ~166s.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "N/A (services/steel_service.py)", "issue": "Steel SDK calls client.sessions.create() and client.sessions.release() are SYNCHRONOUS and executed on the asyncio event loop inside record_tour(). While a pipeline runs, incoming HTTP requests (e.g. POST /api/jobs, GET /api/jobs/{id}) can be blocked for several seconds, causing client-side timeouts (observed 15s ReadTimeout under load). Wrap sync Steel SDK calls with asyncio.to_thread() to keep the loop responsive."},
+      {"endpoint": "uvicorn --reload watches /app/backend", "issue": "Running uvicorn with --reload in production-like preview causes any file write under /app/backend (including tests) to kill in-progress background pipeline tasks (fire-and-forget asyncio tasks). Consider disabling --reload or moving tests outside /app/backend. Tests were relocated to /app/tests/ to work around this."},
+      {"endpoint": "POST /api/jobs", "issue": "URL validation regex accepts strings like 'abc.def' (4+ chars, no whitespace) that aren't real URLs. Not blocking today because Pydantic min_length + downstream scraper eventually errors; consider stricter validation (require domain + TLD)."},
+      {"endpoint": "GET /api/jobs/{id}/video", "issue": "Returns 404 both for 'job not found' and 'video not ready' — same status/detail. Consider distinguishing with 409 or clearer detail messages for API consumers."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/tests/test_wisedemo_backend.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Wrap synchronous Steel SDK calls (client.sessions.create/release) with asyncio.to_thread() in /app/backend/services/steel_service.py so the event loop is not blocked while a pipeline runs.",
+    "Optional: disable uvicorn --reload in supervisor config to prevent in-flight pipelines from being killed on any file save.",
+    "Optional: differentiate 'job not found' vs 'video not ready' response codes/messages in GET /api/jobs/{id}/video."
+  ],
+  "critical_code_review_comments": [
+    "steel_service.record_tour: `client.sessions.create()` and `client.sessions.release()` are blocking (Steel Python SDK is sync); running them inside an async coroutine blocks the ASGI event loop and degrades API responsiveness for all concurrent clients.",
+    "pipeline.run_pipeline: fire-and-forget via asyncio.create_task means a server restart or code reload silently loses running jobs and leaves them stuck in a non-terminal status forever (no recovery / TTL cleanup).",
+    "server._normalize_url regex ^(https?://)?[^\\s]{4,}$ is very permissive (accepts 'abc.def', 'abcd'); combined with Pydantic min_length=4 this permits many non-URL strings.",
+    "server._to_out uses doc['id'] directly — if a document is ever inserted without 'id', response construction will 500. Consider .get() with fallback.",
+    "GET /api/jobs has no pagination or ordering guarantee documented in server.py; ensure db.list_jobs sorts by created_at DESC (couldn't verify without viewing db.py, but tests confirm it returns a list)."
+  ],
+  "updated_files": [
+    "/app/tests/test_wisedemo_backend.py (new)",
+    "/app/test_reports/pytest/pytest_results.xml (new)"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "not tested (skipped per request)"},
+  "test_credentials": "N/A — no auth in this backend",
+  "seed_data_creation": "None (real 3rd-party APIs used: Steel, Gemini, OpenAI TTS)",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Tests live at /app/tests/test_wisedemo_backend.py — DO NOT move them under /app/backend (would trigger uvicorn --reload and kill running pipelines). BASE_URL is read from REACT_APP_BACKEND_URL. Run with: `pytest /app/tests/test_wisedemo_backend.py -v --tb=short -s`. The e2e test hits real Steel/Gemini/OpenAI and takes ~80–180s; polling uses timeout=60 with retry on ReadTimeout to survive event-loop blocking during Steel sync SDK calls. Test suite total ~2–3 minutes. If e2e ever fails with status='failed', capture doc['error'] — likely Steel outage / Gemini quota / OpenAI TTS quota."
+}
