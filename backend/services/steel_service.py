@@ -54,7 +54,9 @@ async def record_tour(actions: list[dict]) -> dict:
     client = _client()
     api_key = os.environ["STEEL_API_KEY"]
 
-    session = client.sessions.create(
+    # Steel SDK is sync; run its blocking calls in a thread to keep the loop responsive.
+    session = await asyncio.to_thread(
+        client.sessions.create,
         dimensions={"width": 1440, "height": 900},
     )
     session_id = session.id
@@ -82,7 +84,7 @@ async def record_tour(actions: list[dict]) -> dict:
         await _run()
     finally:
         try:
-            client.sessions.release(session_id)
+            await asyncio.to_thread(client.sessions.release, session_id)
         except Exception as e:
             print(f"[steel] release warn: {e}")
 
