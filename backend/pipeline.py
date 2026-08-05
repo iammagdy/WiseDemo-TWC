@@ -48,6 +48,8 @@ async def run_pipeline(job_id: str, url: str) -> None:
         await _set(job_id, status="recording", progress=45, step="Filming your product on a cloud browser")
         result = await steel_service.record_tour(actions)
         session_id = result["session_id"]
+        cursor_keyframes = result.get("cursor_keyframes") or []
+        viewport = result.get("viewport") or None
 
         # 5. Fetch MP4
         await _set(job_id, status="fetching", progress=62, step="Downloading the raw footage")
@@ -64,7 +66,16 @@ async def run_pipeline(job_id: str, url: str) -> None:
         # 7. Compose
         await _set(job_id, status="composing", progress=88, step="Editing captions, cards, and audio")
         final_mp4 = os.path.join(VIDEOS_DIR, f"{job_id}.mp4")
-        await composer_service.compose_final(raw_mp4, voice_mp3, product, scenes, tmp, final_mp4)
+        await composer_service.compose_final(
+            raw_mp4,
+            voice_mp3,
+            product,
+            scenes,
+            tmp,
+            final_mp4,
+            cursor_keyframes=cursor_keyframes,
+            viewport=viewport,
+        )
 
         # 8. Ready
         duration = await composer_service.probe_duration(final_mp4)
@@ -90,10 +101,5 @@ async def run_pipeline(job_id: str, url: str) -> None:
             error=str(e)[:500],
         )
     finally:
-        # Keep tmp for debugging; only remove if success
-        try:
-            job_doc_dir = tmp
-            if os.path.exists(os.path.join(VIDEOS_DIR, f"{job_id}.mp4")):
-                shutil.rmtree(job_doc_dir, ignore_errors=True)
-        except Exception:
-            pass
+        # Keep tmp for debugging pipelines regardless of success/failure.
+        pass

@@ -1,0 +1,24 @@
+{
+  "summary": "Verified WiseDemo backend job resilience fixes. Added /app/tests/test_wisedemo_resilience.py with 7 focused tests covering the previously stuck job, startup recovery, stall detection on read, no-false-positive stall check, fresh job creation, and list ordering. All 7 tests pass. Did not run the live end-to-end video pipeline (per instructions).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/tests/test_wisedemo_resilience.py",
+    "/app/test_reports/pytest/pytest_resilience.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "db.mark_stalled_failed uses ISO string comparison against updated_at (also stored as ISO string). This is correct only because all writers use datetime.isoformat() in UTC without offset shifts. If a future writer stores a non-UTC or Z-suffixed timestamp, lexicographic comparison could misfire. Consider standardising to store BSON Date or always use datetime.now(timezone.utc).isoformat() everywhere (currently consistent).",
+    "server.get_job swallows all exceptions from mark_stalled_failed silently (bare except: pass). Consider logging so future stall-check regressions are visible.",
+    "@app.on_event is deprecated in FastAPI; consider migrating to lifespan handlers.",
+    "asyncio.create_task(pipeline.run_pipeline(...)) result is not tracked - the root-cause fix here is at the persistence layer, but an in-process task registry / graceful-shutdown handler would also help."
+  ],
+  "updated_files": ["/app/tests/test_wisedemo_resilience.py"],
+  "success_rate": {"backend": "100% (7/7)", "frontend": "not tested (per request)"},
+  "test_credentials": "n/a",
+  "seed_data_creation": "Two synthetic MongoDB job docs are inserted per test run into `jobs` collection and deleted in teardown fixture. The pre-existing stuck job f6c07705-... is left untouched (only read).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Resilience tests live at /app/tests/test_wisedemo_resilience.py. The test_startup_recovery_marks_orphan_failed test does `sudo supervisorctl restart backend` and waits up to 45s for /api/health. If backend cold-start ever exceeds that, bump the deadline. The stuck job f6c07705-ceb0-43d6-9e04-577175f20b7c is still present in Mongo and reports status=failed with error 'The render pipeline was interrupted...'. iteration_1 tests remain at /app/tests/test_wisedemo_backend.py (untouched).",
+  "rca of the issue": "uvicorn --reload restarts the backend when any .py file under /app/backend is written. Any in-flight asyncio.create_task(pipeline.run_pipeline(...)) is killed but its Mongo row is left with a non-terminal status (e.g. recording/45%). UI polls forever. Fix: (1) startup hook calls db.mark_orphans_failed() bulk-updating any non-{ready,failed} row to failed with a clear 'interrupted' error; (2) GET /api/jobs/{id} calls db.mark_stalled_failed(300) so any doc whose updated_at is >5 min old auto-fails on read. Verified: stuck job f6c07705 now returns failed with human-readable error; freshly seeded orphan flips to failed after supervisor restart; seeded 10-min-old orphan flips to failed on first GET; recent orphan is NOT falsely flipped."
+}

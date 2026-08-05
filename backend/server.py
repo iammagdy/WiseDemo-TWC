@@ -24,6 +24,18 @@ import pipeline
 
 app = FastAPI(title="WiseDemo API")
 
+
+@app.on_event("startup")
+async def _startup() -> None:
+    """Reset any jobs that were mid-flight when the server was last stopped."""
+    try:
+        n = await db.mark_orphans_failed()
+        if n:
+            print(f"[startup] marked {n} orphan job(s) as failed after restart")
+    except Exception as e:
+        print(f"[startup] orphan recovery skipped: {e}")
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -118,6 +130,15 @@ async def get_job(job_id: str):
     doc = await db.get_job(job_id)
     if not doc:
         raise HTTPException(status_code=404, detail="Job not found")
+    # Auto-fail jobs that haven't progressed in 5 minutes so the UI never
+    # perpetually spins on an orphaned/crashed background task.
+    try:
+        if doc.get("status") not in ("ready", "failed"):
+            n = await db.mark_stalled_failed(stall_seconds=300)
+            if n:
+                doc = await db.get_job(job_id) or doc
+    except Exception:
+        pass
     return _to_out(doc)
 
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from typing import Any
 
 from google import genai
@@ -20,7 +21,7 @@ def client() -> genai.Client:
     return _client
 
 
-MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash-lite")
 
 
 def _extract_json(text: str) -> dict:
@@ -38,7 +39,34 @@ def _extract_json(text: str) -> dict:
     return json.loads(text)
 
 
-import re
+async def _call_gemini_with_retry(prompt: str, temperature: float, max_retries: int = 5) -> str:
+    """Call Gemini generate_content with exponential backoff on 429/503/UNAVAILABLE."""
+    import asyncio as _a
+    delay = 6.0
+    last_err = None
+    for attempt in range(max_retries):
+        try:
+            resp = await _a.to_thread(
+                lambda: client().models.generate_content(
+                    model=MODEL,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json",
+                        temperature=temperature,
+                    ),
+                )
+            )
+            return resp.text or "{}"
+        except Exception as e:
+            msg = str(e)
+            last_err = e
+            transient = "503" in msg or "UNAVAILABLE" in msg or "429" in msg or "overload" in msg.lower()
+            if attempt < max_retries - 1 and transient:
+                await _a.sleep(delay)
+                delay = min(30.0, delay * 1.6)
+                continue
+            raise
+    raise last_err  # type: ignore
 
 
 async def analyze_product(snapshot: dict) -> dict:
@@ -64,15 +92,8 @@ Return ONLY a JSON object with these exact keys:
 
 Be specific, avoid generic marketing fluff. Base every claim on the snapshot content."""
 
-    resp = client().models.generate_content(
-        model=MODEL,
-        contents=prompt,
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json",
-            temperature=0.4,
-        ),
-    )
-    return _extract_json(resp.text or "{}")
+    text = await _call_gemini_with_retry(prompt, temperature=0.4)
+    return _extract_json(text)
 
 
 async def plan_demo(product: dict, url: str) -> dict:
@@ -115,15 +136,8 @@ Rules:
 - Do not mention pricing unless product analysis proves a pricing tier
 - Never invent features not in top_features"""
 
-    resp = client().models.generate_content(
-        model=MODEL,
-        contents=prompt,
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json",
-            temperature=0.6,
-        ),
-    )
-    return _extract_json(resp.text or "{}")
+    text = await _call_gemini_with_retry(prompt, temperature=0.6)
+    return _extract_json(text)
 
 
 async def review_video(video_path: str, product: dict) -> dict:
