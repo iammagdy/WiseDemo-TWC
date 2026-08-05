@@ -243,7 +243,12 @@ export async function getSteelSession(sessionId: string): Promise<Record<string,
 // ---- CDP over WebSocket ------------------------------------------------
 
 export async function openCdp(websocketUrl: string): Promise<WebSocket> {
-  const upgradeUrl = websocketUrl.replace(/^ws/, "http");
+  // Current Steel CDP endpoints require the API key in the websocket query.
+  // Keep it in-process only; callers and diagnostics never receive this URL.
+  const authenticatedWebsocketUrl = websocketUrl.includes("apiKey=")
+    ? websocketUrl
+    : `${websocketUrl}${websocketUrl.includes("?") ? "&" : "?"}apiKey=${encodeURIComponent(requireSteelKey())}`;
+  const upgradeUrl = authenticatedWebsocketUrl.replace(/^ws/, "http");
   const attempts = CDP_READINESS_ATTEMPTS;
 
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
@@ -261,7 +266,7 @@ export async function openCdp(websocketUrl: string): Promise<WebSocket> {
     if (typeof WebSocket !== "undefined") {
       try {
         return await new Promise<WebSocket>((resolve, reject) => {
-          const socket = new WebSocket(websocketUrl);
+          const socket = new WebSocket(authenticatedWebsocketUrl);
           const cleanup = () => {
             clearTimeout(timer);
             socket.removeEventListener("open", onOpen);
@@ -822,7 +827,18 @@ export async function runScenesOverCdp(
     const targets = (await cdpCall(socket, msgId++, "Target.getTargets")) as {
       targetInfos?: Array<{ targetId: string; type: string; url: string }>;
     };
-    const pageTarget = targets.targetInfos?.find((target) => target.type === "page");
+    // Steel can expose internal Chromium pages alongside the page whose pixels
+    // are being recorded. Its recordable surface begins as about:blank; prefer
+    // that target so a navigation cannot succeed on an invisible tab while the
+    // stored recording remains blank.
+    const pageTarget =
+      targets.targetInfos?.find(
+        (target) => target.type === "page" && target.url === "about:blank",
+      ) ??
+      targets.targetInfos?.find(
+        (target) => target.type === "page" && !target.url.startsWith("chrome://"),
+      ) ??
+      targets.targetInfos?.find((target) => target.type === "page");
     if (!pageTarget) throw new Error("Steel session has no page target yet.");
 
     const attached = (await cdpCall(socket, msgId++, "Target.attachToTarget", {

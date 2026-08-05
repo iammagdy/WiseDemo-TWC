@@ -2,6 +2,11 @@ import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 
 import { cloneComposition, compositionSchema } from "@/composition/model";
+import {
+  detectSourceViewport,
+  readMp4Dimensions,
+  type SourceViewport,
+} from "@/composition/source-viewport";
 import { compositionFromTemplate } from "@/composition/templates";
 import type { Json } from "@/integrations/appwrite/types";
 import { assertPublicHttpUrl } from "@/lib/public-url.server";
@@ -17,6 +22,16 @@ const sourceSchema = z.object({
     .max(60 * 60),
   width: z.number().int().min(1).max(7680),
   height: z.number().int().min(1).max(7680),
+  sourceViewport: z
+    .object({
+      videoWidth: z.number().int().min(1),
+      videoHeight: z.number().int().min(1),
+      contentX: z.number().int().min(0),
+      contentY: z.number().int().min(0),
+      contentWidth: z.number().int().min(1),
+      contentHeight: z.number().int().min(1),
+    })
+    .optional(),
 });
 
 const timelineSchema = z.object({
@@ -62,7 +77,7 @@ export function buildVideoComposition(timeline: VideoTimeline, source: VideoSour
     cropRight: timeline.cropRight,
     cropBottom: timeline.cropBottom,
     cropLeft: timeline.cropLeft,
-    sourceViewport: {
+    sourceViewport: source.sourceViewport ?? {
       videoWidth: source.width,
       videoHeight: source.height,
       contentX: 0,
@@ -71,6 +86,16 @@ export function buildVideoComposition(timeline: VideoTimeline, source: VideoSour
       contentHeight: source.height,
     },
   };
+  const editDuration = Math.min(8.5, Math.max(8, source.durationSeconds - 0.5));
+  const editStart = Math.min(3.5, Math.max(0, source.durationSeconds - editDuration));
+  composition.recording.editorialCuts = [
+    {
+      id: "public-landing-edit",
+      sourceStartSeconds: editStart,
+      sourceDurationSeconds: editDuration,
+      freezeSeconds: 0,
+    },
+  ];
   composition.frame.addressText = timeline.addressText;
   composition.intro.title = timeline.hook || timeline.title;
   composition.intro.subtitle = timeline.context || "A real product moment, made shareable.";
@@ -85,6 +110,16 @@ export function buildVideoComposition(timeline: VideoTimeline, source: VideoSour
         zoom: timeline.zoom,
         panX: 0,
         panY: 0,
+      },
+    ];
+  }
+  if (timeline.context) {
+    composition.captions.items = [
+      {
+        id: "product-context",
+        start: composition.intro.duration + 1.1,
+        duration: Math.min(3.2, Math.max(1.5, editDuration - 2)),
+        text: timeline.context,
       },
     ];
   }
@@ -160,12 +195,22 @@ export const capturePublicWebsiteVideo = createServerFn({ method: "POST" })
     const { createSteelSession, fetchSessionMp4, releaseSteelSession, runScenesOverCdp } =
       await import("@/lib/steel-recorder.server");
     const session = await createSteelSession(publicUrl.toString(), "english");
+    let sourceViewport: SourceViewport | undefined;
     try {
       if (!session.websocketUrl) throw new Error("The public capture browser was unavailable.");
       const execution = await runScenesOverCdp(
         session.websocketUrl,
         [
-          { type: "goto", url: publicUrl.toString(), waitMs: 1_500 },
+          {
+            type: "goto",
+            url: publicUrl.toString(),
+            waitMs: 1_500,
+            expected: { urlIncludes: publicUrl.hostname },
+          },
+          {
+            type: "eval",
+            expression: `location.hostname === ${JSON.stringify(publicUrl.hostname)} && (document.body?.innerText ?? "").trim().length > 80`,
+          },
           { type: "wait", ms: 3_000 },
           { type: "scroll", deltaY: 520 },
           { type: "wait", ms: 3_000 },
@@ -175,17 +220,24 @@ export const capturePublicWebsiteVideo = createServerFn({ method: "POST" })
         25_000,
       );
       if (!execution.completed) throw new Error("The public website capture did not complete.");
+      if (execution.browserMetrics) {
+        sourceViewport = detectSourceViewport(execution.browserMetrics, {
+          width: 1280,
+          height: 800,
+        }).sourceViewport;
+      }
     } finally {
       await releaseSteelSession(session.id).catch(() => undefined);
     }
     const recording = await fetchSessionMp4(session.id, { attempts: 10, initialWaitMs: 800 });
     if (!recording) throw new Error("The public website recording was not finalized.");
-    if (recording.durationSeconds < 8 || recording.durationSeconds > 20) {
-      throw new Error("The public website recording fell outside the 8–20 second proof range.");
+    if (recording.durationSeconds < 8 || recording.durationSeconds > 69) {
+      throw new Error("The public website recording fell outside the supported raw-take range.");
     }
     const [{ appwriteRecordingStorage }] = await Promise.all([
       import("@/integrations/appwrite/storage.server"),
     ]);
+    const dimensions = readMp4Dimensions(recording.bytes) ?? { width: 1280, height: 800 };
     const fileId = crypto.randomUUID();
     await appwriteRecordingStorage().upsertRecording(fileId, recording.bytes);
     return repository.createDirectorArtifact({
@@ -199,8 +251,16 @@ export const capturePublicWebsiteVideo = createServerFn({ method: "POST" })
           kind: "uploaded",
           fileId,
           durationSeconds: recording.durationSeconds,
-          width: 1280,
-          height: 800,
+          width: dimensions.width,
+          height: dimensions.height,
+          sourceViewport: sourceViewport ?? {
+            videoWidth: dimensions.width,
+            videoHeight: dimensions.height,
+            contentX: 0,
+            contentY: Math.min(86, Math.max(0, dimensions.height - 1)),
+            contentWidth: dimensions.width,
+            contentHeight: Math.max(1, dimensions.height - 86),
+          },
         },
         provenance: "public-website-capture",
       } as Json,
