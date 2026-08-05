@@ -46,7 +46,9 @@ const timelineSchema = z.object({
   cropRight: z.number().min(0).max(0.4).default(0),
   cropBottom: z.number().min(0).max(0.4).default(0),
   cropLeft: z.number().min(0).max(0.4).default(0),
-  frame: z.enum(["minimal-browser", "premium-laptop", "clean-saas"]).default("premium-laptop"),
+  frame: z
+    .enum(["full-screen", "minimal-browser", "premium-laptop", "clean-saas"])
+    .default("full-screen"),
 });
 
 type VideoSource = z.infer<typeof sourceSchema>;
@@ -68,7 +70,29 @@ function parseTimeline(value: Json): VideoTimeline {
 }
 
 export function buildVideoComposition(timeline: VideoTimeline, source: VideoSource) {
-  const composition = cloneComposition(compositionFromTemplate(timeline.frame));
+  const composition = cloneComposition(
+    compositionFromTemplate(timeline.frame === "full-screen" ? "minimal-browser" : timeline.frame),
+  );
+  const isFullScreen = timeline.frame === "full-screen";
+  if (isFullScreen) {
+    composition.frame = {
+      ...composition.frame,
+      id: "raw-fullscreen",
+      x: 0,
+      y: 0,
+      width: 1920,
+      radius: 0,
+      borderWidth: 0,
+      shadowBlur: 0,
+      shadowOpacity: 0,
+      chromeVisible: false,
+    };
+    composition.background = { ...composition.background, type: "solid", colors: ["#050505"] };
+    composition.animation = { ...composition.animation, entrance: "none", floatingMotion: 0 };
+    composition.intro = { ...composition.intro, enabled: false, duration: 0 };
+    composition.outro = { ...composition.outro, enabled: false, duration: 0 };
+    composition.captions = { ...composition.captions, position: "lower-third", maxWidth: 1040 };
+  }
   composition.recording = {
     ...composition.recording,
     fit: "cover",
@@ -87,7 +111,9 @@ export function buildVideoComposition(timeline: VideoTimeline, source: VideoSour
     },
   };
   const editDuration = Math.min(8.5, Math.max(8, source.durationSeconds - 0.5));
-  const editStart = Math.min(3.5, Math.max(0, source.durationSeconds - editDuration));
+  const editStart = isFullScreen
+    ? 0
+    : Math.min(3.5, Math.max(0, source.durationSeconds - editDuration));
   composition.recording.editorialCuts = [
     {
       id: "public-landing-edit",
@@ -113,16 +139,31 @@ export function buildVideoComposition(timeline: VideoTimeline, source: VideoSour
       },
     ];
   }
-  if (timeline.context) {
-    composition.captions.items = [
-      {
-        id: "product-context",
-        start: composition.intro.duration + 1.1,
-        duration: Math.min(3.2, Math.max(1.5, editDuration - 2)),
-        text: timeline.context,
-      },
-    ];
-  }
+  composition.captions.items = [
+    ...(timeline.hook
+      ? [{ id: "product-hook", start: 0.35, duration: 2.35, text: timeline.hook }]
+      : []),
+    ...(timeline.context
+      ? [
+          {
+            id: "product-context",
+            start: isFullScreen ? 3.15 : composition.intro.duration + 1.1,
+            duration: Math.min(2.8, Math.max(1.5, editDuration - 4.8)),
+            text: timeline.context,
+          },
+        ]
+      : []),
+    ...(isFullScreen && timeline.cta
+      ? [
+          {
+            id: "product-cta",
+            start: Math.max(5.8, editDuration - 2.2),
+            duration: 1.9,
+            text: timeline.cta,
+          },
+        ]
+      : []),
+  ];
   return compositionSchema.parse(composition);
 }
 

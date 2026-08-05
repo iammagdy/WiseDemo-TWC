@@ -33,10 +33,11 @@ export function GenericVideoStudio({ projectId }: { projectId: string }) {
   const [context, setContext] = useState("");
   const [cta, setCta] = useState("");
   const [zoom, setZoom] = useState(1.08);
-  const [crop, setCrop] = useState(0);
-  const [frame, setFrame] = useState<"minimal-browser" | "premium-laptop" | "clean-saas">(
-    "premium-laptop",
-  );
+  const [cropTop, setCropTop] = useState(0);
+  const [cropBottom, setCropBottom] = useState(0);
+  const [frame, setFrame] = useState<
+    "full-screen" | "minimal-browser" | "premium-laptop" | "clean-saas"
+  >("full-screen");
   const [publicUrl, setPublicUrl] = useState("https://wiseresume.app");
   const [busy, setBusy] = useState<"upload" | "capture" | "save" | "render" | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -107,9 +108,9 @@ export function GenericVideoStudio({ projectId }: { projectId: string }) {
             cta,
             addressText: "",
             zoom,
-            cropTop: crop,
+            cropTop,
             cropRight: 0,
-            cropBottom: crop,
+            cropBottom,
             cropLeft: 0,
             frame,
           },
@@ -294,6 +295,7 @@ export function GenericVideoStudio({ projectId }: { projectId: string }) {
                   onChange={(event) => setFrame(event.target.value as typeof frame)}
                   className="w-full rounded-md border border-border bg-background px-3 py-2"
                 >
+                  <option value="full-screen">Full screen</option>
                   <option value="premium-laptop">Premium laptop</option>
                   <option value="minimal-browser">Minimal browser</option>
                   <option value="clean-saas">Clean SaaS</option>
@@ -308,12 +310,20 @@ export function GenericVideoStudio({ projectId }: { projectId: string }) {
                 onChange={setZoom}
               />
               <Range
-                label={`Top / bottom crop ${Math.round(crop * 100)}%`}
+                label={`Top crop ${Math.round(cropTop * 100)}%`}
                 min={0}
                 max={0.35}
                 step={0.01}
-                value={crop}
-                onChange={setCrop}
+                value={cropTop}
+                onChange={setCropTop}
+              />
+              <Range
+                label={`Bottom crop ${Math.round(cropBottom * 100)}%`}
+                min={0}
+                max={0.35}
+                step={0.01}
+                value={cropBottom}
+                onChange={setCropBottom}
               />
             </div>
             <Button
@@ -416,7 +426,19 @@ function Range({
 }) {
   return (
     <label className="block text-sm">
-      <span className="mb-1.5 block text-muted-foreground">{label}</span>
+      <span className="mb-1.5 flex items-center justify-between gap-3 text-muted-foreground">
+        {label}
+        <input
+          aria-label={`${label} value`}
+          className="w-20 rounded border border-border bg-background px-2 py-1 text-right text-xs text-foreground"
+          type="number"
+          min={min}
+          max={max}
+          step={step}
+          value={value}
+          onChange={(event) => onChange(Number(event.target.value))}
+        />
+      </span>
       <input
         className="w-full accent-primary"
         type="range"
